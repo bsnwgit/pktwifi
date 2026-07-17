@@ -1,0 +1,38 @@
+# Template — install.sh substitutes __INSTALL_DIR__ / __LOG_DIR__ /
+# __SERVICE_USER__ / __SERVICE_GROUP__ before installing to systemd.
+# For a manual install, replace these placeholders yourself.
+[Unit]
+Description=pktWiFi Enterprise WiFi Analyzer
+Documentation=https://github.com/bsnwgit/pktwifi
+After=network.target
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+Group=__SERVICE_GROUP__
+WorkingDirectory=__INSTALL_DIR__
+
+Environment=PKTWIFI_CONFIG=__INSTALL_DIR__/config.yaml
+Environment=PKTWIFI_INSTALL_DIR=__INSTALL_DIR__
+
+ExecStart=__INSTALL_DIR__/venv/bin/uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port 8769 \
+    --workers 1 \
+    --log-level info \
+    --no-access-log
+
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=3
+
+StandardOutput=append:__LOG_DIR__/pktwifi.log
+StandardError=append:__LOG_DIR__/pktwifi.log
+
+NoNewPrivileges=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

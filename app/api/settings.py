@@ -1,0 +1,54 @@
+"""
+/api/settings/* — generic runtime settings key/value store.
+
+Anything not covering startup/infra config (see app/config.py) lives here:
+SAML config, alert/metrics retention windows, backup schedule, base_url
+used to build the SAML ACS URL, etc. Frontend renders these on the
+Settings page grouped by section.
+"""
+from __future__ import annotations
+
+import json
+
+import aiosqlite
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+
+from app.database import get_db
+from app.dependencies import CurrentUser, AdminUser
+
+router = APIRouter()
+
+# Keys that must never be echoed back verbatim to non-admin callers.
+_SECRET_KEYS = {"okta_saml_sp_key"}
+
+
+class SettingsUpdate(BaseModel):
+    values: dict
+
+
+@router.get("")
+async def get_settings(user: CurrentUser, db: aiosqlite.Connection = Depends(get_db)):
+    async with db.execute("SELECT key, value FROM settings") as cur:
+        rows = await cur.fetchall()
+    out = {}
+    for r in rows:
+        if r["key"] in _SECRET_KEYS and user["role"] != "admin":
+            continue
+        try:
+            out[r["key"]] = json.loads(r["value"])
+        except (ValueError, TypeError):
+            out[r["key"]] = r["value"]
+    return out
+
+
+@router.put("")
+async def update_settings(body: SettingsUpdate, user: AdminUser, db: aiosqlite.Connection = Depends(get_db)):
+    for key, value in body.values.items():
+        await db.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now')) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (key, json.dumps(value)),
+        )
+    await db.commit()
+    return {"status": "ok"}
