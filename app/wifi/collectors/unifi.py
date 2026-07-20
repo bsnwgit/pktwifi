@@ -1,17 +1,47 @@
 """
 app/wifi/collectors/unifi.py
 -----------------------------
-Ubiquiti UniFi Network Controller collector — uses the classic controller
-REST API (/api/s/<site>/stat/device and /api/s/<site>/stat/sta), which works
-against both a standalone UniFi Network Application and a UDM/UDM-Pro
-("unifi OS" console, where every path is proxied under /proxy/network).
+Ubiquiti UniFi Network Controller collector. Supports two auth modes,
+picked via config["auth_method"]:
+
+- "userpass" (default) — the classic controller REST API
+  (/api/s/<site>/stat/device and /api/s/<site>/stat/sta), which works
+  against both a standalone UniFi Network Application and a UDM/UDM-Pro
+  ("UniFi OS" console, where every path is proxied under /proxy/network).
+  Rich per-radio (channel/utilization/noise floor) and per-client detail.
+  Three things confirmed necessary against real UniFi OS gear:
+  `follow_redirects=True` (an http:// controller_url that self-redirects
+  to https:// otherwise raises on the login request before ever
+  authenticating), echoing the `x-csrf-token` response header from login
+  back as `X-Csrf-Token` on every subsequent request (UniFi OS consoles
+  401 every proxied /proxy/network/api/* call without it, even with a
+  valid session cookie — classic standalone controller software doesn't
+  set this header, so it's a no-op there), and resolving the configured
+  site against `GET /self/sites` (the UniFi UI's Site name is the `desc`
+  field — the URL path segment the API needs is the separate, never-
+  shown `name` slug; using the display name directly 401s).
+
+- "api_key" — Ubiquiti's official local Network Integration API v1
+  (/proxy/network/integration/v1), authenticated with an `X-API-KEY`
+  header instead of a username/password login. Only available on a UniFi
+  OS console (UDM/UDM-Pro/Cloud Gateway) with Integrations enabled under
+  Settings -> Control Plane -> Integrations — there is no standalone-
+  controller equivalent. Endpoint paths and the {meta, data} envelope are
+  per Ubiquiti's published documentation; this mode has not been verified
+  against live UniFi OS hardware. The Integration API is intentionally a
+  "limited subset focused on common operations" (Ubiquiti's own
+  description) — it does not expose the per-radio channel/utilization
+  breakdown the classic API does, so api_key-mode devices report coarse
+  online/offline status only, with an empty radios list.
 
 Config shape:
 {
   "controller_url": "https://10.0.0.1",   # no trailing slash
-  "username": "...", "password": "...",
+  "auth_method": "userpass",              # "userpass" | "api_key"
+  "username": "...", "password": "...",   # userpass mode
+  "api_key": "...",                       # api_key mode
   "site": "default",
-  "udm": false,          # true if this is a UDM/UDM-Pro/Cloud Key Gen2+ console
+  "udm": false,          # userpass mode only — true if this is a UDM/UDM-Pro/Cloud Key Gen2+ console
   "verify_tls": false    # most on-prem controllers use a self-signed cert
 }
 """
@@ -26,12 +56,25 @@ from app.wifi.collectors.base import Collector, PollResult, AccessPointReading, 
 log = logging.getLogger("pktwifi.collectors.unifi")
 
 
+def _first(d: dict, *keys: str, default=None):
+    """The Integration API's exact per-field casing isn't independently
+    verified against live gear (see module docstring) — probe a few
+    plausible key spellings rather than assuming one and silently
+    returning None for every device/client."""
+    for k in keys:
+        if k in d and d[k] is not None:
+            return d[k]
+    return default
+
+
 class UnifiCollector(Collector):
     def __init__(self, config: dict):
         super().__init__(config)
         self.base = (config.get("controller_url") or "").rstrip("/")
+        self.auth_method = config.get("auth_method", "userpass")
         self.username = config.get("username", "")
         self.password = config.get("password", "")
+        self.api_key = config.get("api_key", "")
         self.site = config.get("site", "default")
         self.udm = bool(config.get("udm", False))
         self.verify_tls = bool(config.get("verify_tls", False))
@@ -43,22 +86,129 @@ class UnifiCollector(Collector):
         return f"{self.base}/api/auth/login" if self.udm else f"{self.base}/api/login"
 
     async def poll(self) -> PollResult:
-        if not self.base or not self.username:
-            raise ValueError("controller_url and username are required")
+        if not self.base:
+            raise ValueError("controller_url is required")
+        if self.auth_method == "api_key":
+            if not self.api_key:
+                raise ValueError("api_key is required in API key mode")
+            return await self._poll_api_key()
+        if not self.username:
+            raise ValueError("username and password are required in username/password mode")
+        return await self._poll_userpass()
 
-        async with httpx.AsyncClient(timeout=20, verify=self.verify_tls) as client:
+    async def _poll_api_key(self) -> PollResult:
+        headers = {"X-API-KEY": self.api_key, "Accept": "application/json"}
+        integration_base = f"{self.base}/proxy/network/integration/v1"
+
+        async with httpx.AsyncClient(timeout=20, verify=self.verify_tls, headers=headers, follow_redirects=True) as client:
+            sites_resp = await client.get(f"{integration_base}/sites")
+            sites_resp.raise_for_status()
+            sites = sites_resp.json().get("data", [])
+            site_id = None
+            for s in sites:
+                name = _first(s, "name", "desc", "description", default="")
+                if str(name).lower() == str(self.site).lower():
+                    site_id = s.get("id")
+                    break
+            if site_id is None and len(sites) == 1:
+                site_id = sites[0].get("id")
+            if site_id is None:
+                raise ValueError(f"No site named '{self.site}' found via the Integration API — check the Site field")
+
+            devices_resp = await client.get(f"{integration_base}/sites/{site_id}/devices")
+            devices_resp.raise_for_status()
+            devices = devices_resp.json().get("data", [])
+
+            clients_resp = await client.get(f"{integration_base}/sites/{site_id}/clients")
+            clients_resp.raise_for_status()
+            clients = clients_resp.json().get("data", [])
+
+        result = PollResult()
+        for dev in devices:
+            device_type = str(_first(dev, "type", "deviceType", default="")).lower()
+            if device_type and "ap" not in device_type and "uap" not in device_type:
+                continue
+            mac = _first(dev, "macAddress", "mac", default="")
+            state = str(_first(dev, "state", "status", default="")).lower()
+            result.access_points.append(AccessPointReading(
+                external_id=str(_first(dev, "id", "_id", default=mac)),
+                name=_first(dev, "name", default=mac),
+                mac_address=mac,
+                ip_address=_first(dev, "ipAddress", "ip"),
+                vendor="ubiquiti-unifi",
+                model=_first(dev, "model"),
+                firmware_version=_first(dev, "firmwareVersion", "version"),
+                status="online" if state in ("online", "connected", "1") else "offline",
+                uptime_seconds=_first(dev, "uptimeSeconds", "uptime"),
+            ))
+
+        ap_ids = {str(_first(dev, "id", "_id", default="")) for dev in devices}
+        for c in clients:
+            uplink_id = str(_first(c, "uplinkDeviceId", "apId", "ap_id", default=""))
+            if uplink_id not in ap_ids:
+                continue
+            # api_key mode reports clients per-AP but not per-radio (see
+            # module docstring) — attach directly to a synthetic radio-less
+            # bucket so the AP still shows a client count.
+            for ap in result.access_points:
+                if ap.external_id == uplink_id:
+                    if not ap.radios:
+                        ap.radios.append(RadioReading(band="unknown"))
+                    ap.radios[0].clients.append(ClientReading(
+                        mac_address=_first(c, "macAddress", "mac", default=""),
+                        hostname=_first(c, "name", "hostnameOrIp", "hostname"),
+                        ip_address=_first(c, "ipAddress", "ip"),
+                        ssid=_first(c, "ssid"),
+                        rssi_dbm=_first(c, "rssi"),
+                    ))
+                    break
+
+        return result
+
+    async def _resolve_site_slug(self, client: httpx.AsyncClient, api_prefix: str, site: str) -> str:
+        """The UniFi UI's Site name is the `desc` field — the URL path
+        segment the API needs is the separate `name` slug, which the UI
+        never shows. Resolve whatever was configured (display name or
+        slug) to the real slug via /self/sites."""
+        resp = await client.get(f"{api_prefix}/self/sites")
+        resp.raise_for_status()
+        sites = resp.json().get("data", [])
+        for s in sites:
+            if s.get("name") == site:
+                return s["name"]
+        for s in sites:
+            if (s.get("desc") or "").strip().lower() == site.strip().lower():
+                return s["name"]
+        if len(sites) == 1:
+            return sites[0]["name"]
+        available = ", ".join(sorted({s.get("desc") or s.get("name", "") for s in sites})) or "none"
+        raise ValueError(f"No site named '{site}' found on this controller — check the Site field (available: {available})")
+
+    async def _poll_userpass(self) -> PollResult:
+        async with httpx.AsyncClient(timeout=20, verify=self.verify_tls, follow_redirects=True) as client:
             login_resp = await client.post(
                 self._login_path(), json={"username": self.username, "password": self.password}
             )
             login_resp.raise_for_status()
 
-            prefix = self._api_prefix()
+            # UniFi OS (UDM/UDM-Pro/Cloud Gateway) consoles require every
+            # request after login to echo back the CSRF token issued on
+            # login as an X-Csrf-Token header, or proxied API calls 401
+            # even with a valid session cookie. Classic standalone
+            # controller software doesn't set this header at all, so this
+            # is a no-op there.
+            csrf_token = login_resp.headers.get("x-csrf-token")
+            if csrf_token:
+                client.headers["X-Csrf-Token"] = csrf_token
 
-            devices_resp = await client.get(f"{prefix}/s/{self.site}/stat/device")
+            prefix = self._api_prefix()
+            site_slug = await self._resolve_site_slug(client, prefix, self.site)
+
+            devices_resp = await client.get(f"{prefix}/s/{site_slug}/stat/device")
             devices_resp.raise_for_status()
             devices = devices_resp.json().get("data", [])
 
-            clients_resp = await client.get(f"{prefix}/s/{self.site}/stat/sta")
+            clients_resp = await client.get(f"{prefix}/s/{site_slug}/stat/sta")
             clients_resp.raise_for_status()
             clients = clients_resp.json().get("data", [])
 

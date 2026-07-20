@@ -3,6 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../store/auth'
 import { api } from '../api/client'
 import clsx from 'clsx'
+import AiAssistant from './AiAssistant'
 
 function ChangePasswordModal({ onClose }: { onClose: () => void }) {
   const [currentPw, setCurrentPw] = useState('')
@@ -74,6 +75,7 @@ const NAV = [
   { to: '/alerts',         label: 'Alerts',        icon: '△', adminOnly: false },
   { to: '/logs',           label: 'Logs',          icon: '≡', adminOnly: false },
   { to: '/collectors',     label: 'Collectors',    icon: '⇅', adminOnly: true },
+  { to: '/sites',          label: 'Sites',         icon: '⚑', adminOnly: true },
   { to: '/settings',       label: 'Settings',      icon: '⚙', adminOnly: true },
 ]
 
@@ -171,6 +173,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         </main>
       </div>
 
+      <AiAssistant />
       {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
     </div>
   )

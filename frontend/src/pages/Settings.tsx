@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { api, User, Integration } from '../api/client'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { api, User, UserIn, Integration, IntegrationInput, SslStatus, UserApiKey } from '../api/client'
 import { useAuth } from '../store/auth'
 import HelpButton from '../components/HelpButton'
 import { copyToClipboard } from '../utils/clipboard'
@@ -73,6 +73,39 @@ function SelectInput({ value, onChange, options }: {
   )
 }
 
+function SendTestButton({ channel }: { channel: string }) {
+  const [status, setStatus] = useState<'idle' | 'loading' | 'sent' | 'failed' | 'skipped'>('idle')
+  const [detail, setDetail] = useState('')
+
+  const run = async () => {
+    setStatus('loading')
+    setDetail('')
+    try {
+      const res = await api.testNotification(channel)
+      setStatus(res.status as 'sent' | 'failed' | 'skipped')
+      setDetail(res.detail || '')
+    } catch (e) {
+      setStatus('failed')
+      setDetail(String(e))
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 mt-2 mb-1">
+      <button
+        onClick={run}
+        disabled={status === 'loading'}
+        className="px-3 py-1.5 text-xs rounded-lg border border-gray-600 bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      >
+        {status === 'loading' ? 'Sending…' : 'Send Test'}
+      </button>
+      {status === 'sent'    && <span className="text-xs text-green-400">✓ Sent{detail ? ` — ${detail}` : ''}</span>}
+      {status === 'skipped' && <span className="text-xs text-yellow-400">⚠ Skipped — {detail}</span>}
+      {status === 'failed'  && <span className="text-xs text-red-400">✗ Failed — {detail}</span>}
+    </div>
+  )
+}
+
 function RestartServiceRow() {
   const [state, setState] = useState<'idle' | 'restarting' | 'done' | 'error'>('idle')
 
@@ -107,6 +140,20 @@ function RestartServiceRow() {
         {state === 'error' && <span className="text-sm text-red-400">Restart failed — check server logs</span>}
       </div>
     </div>
+  )
+}
+
+// -- Port field — lives in config.yaml, not the SQLite-backed settings; value
+// is lifted to the parent so it saves through the General tab's one Save button --
+function PortField({ value, onChange, loaded }: { value: number; onChange: (v: number) => void; loaded: boolean }) {
+  return (
+    <Field label="Port" hint="Port the app listens on. Requires a service restart — the browser will need to follow the app to the new port/URL afterward.">
+      {!loaded ? (
+        <p className="text-xs text-white">Loading…</p>
+      ) : (
+        <NumberInput value={value} onChange={onChange} min={1} max={65535} />
+      )}
+    </Field>
   )
 }
 
@@ -347,193 +394,770 @@ const SIBLING_LABELS: Record<string, string> = {
   pktflow: 'pktFlow — traffic flow context',
   pktlog: 'pktLog — AP/controller syslogs',
   pktpcap: 'pktPCAP — packet capture feeds',
+  pktipam: 'pktIPAM — subnet/DHCP/DNS inventory',
+  pkthub: 'pktHub',
+}
+
+interface IntegrationFormState {
+  name: string; app_name: string; base_url: string; suite_token: string
+}
+
+const EMPTY_INTEGRATION: IntegrationFormState = { name: '', app_name: 'pktsnmp', base_url: '', suite_token: '' }
+
+function IntegrationFormModal({ integration, onClose, onSaved }: {
+  integration: Integration | null; onClose: () => void; onSaved: () => void
+}) {
+  const editing = !!integration
+  const [form, setForm] = useState<IntegrationFormState>(
+    editing ? { name: integration!.name, app_name: integration!.app_name, base_url: integration!.base_url, suite_token: '' }
+            : { ...EMPTY_INTEGRATION }
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const setF = <K extends keyof IntegrationFormState>(k: K, v: IntegrationFormState[K]) => setForm(f => ({ ...f, [k]: v }))
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    setError('')
+    try {
+      if (editing) {
+        const body: Partial<IntegrationInput> = { name: form.name, base_url: form.base_url }
+        if (form.suite_token) body.suite_token = form.suite_token
+        await api.updateIntegration(integration!.id, body)
+      } else {
+        await api.createIntegration(form)
+      }
+      onSaved()
+    } catch (e: any) {
+      setError(e.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const inp = 'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500'
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-white mb-5">{editing ? `Edit — ${integration!.name}` : 'Add Connection'}</h2>
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-xs text-white block mb-1">Name *</label>
+            <input value={form.name} onChange={e => setF('name', e.target.value)} required autoFocus
+              placeholder="e.g. Main pktsnmp" className={inp} />
+          </div>
+          {!editing && (
+            <div>
+              <label className="text-xs text-white block mb-1">App *</label>
+              <select value={form.app_name} onChange={e => setF('app_name', e.target.value)} className={inp}>
+                {Object.keys(SIBLING_LABELS).map(app => (
+                  <option key={app} value={app}>{SIBLING_LABELS[app]}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div>
+            <label className="text-xs text-white block mb-1">Base URL *</label>
+            <input value={form.base_url} onChange={e => setF('base_url', e.target.value)} required
+              placeholder="https://server:port" className={inp} />
+          </div>
+          <div>
+            <label className="text-xs text-white block mb-1">Suite Token {editing ? '(leave blank to keep)' : '*'}</label>
+            <input type="password" value={form.suite_token} onChange={e => setF('suite_token', e.target.value)}
+              required={!editing} placeholder="From that app's Settings -> Security -> Suite Integration" className={inp} />
+          </div>
+          {error && <p className="text-red-400 text-xs">{error}</p>}
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-white">Cancel</button>
+            <button type="submit" disabled={saving} className="px-4 py-2 text-sm bg-sky-600 hover:bg-sky-500 text-white rounded-lg disabled:opacity-50">
+              {saving ? 'Saving…' : (editing ? 'Save Changes' : 'Add Connection')}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
 }
 
 function SiblingIntegrations() {
   const [items, setItems] = useState<Integration[]>([])
-  const [edits, setEdits] = useState<Record<string, { base_url: string; suite_token: string }>>({})
-  const [testResult, setTestResult] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
+  const [modal, setModal] = useState<'new' | Integration | null>(null)
+  const [confirm, setConfirm] = useState<Integration | null>(null)
+  const [testResult, setTestResult] = useState<Record<number, string>>({})
+  const [error, setError] = useState('')
 
-  const load = () => api.getIntegrations()
-    .then(ints => {
-      setItems(ints)
-      const e: Record<string, { base_url: string; suite_token: string }> = {}
-      ints.forEach(i => { e[i.app_name] = { base_url: i.base_url, suite_token: '' } })
-      setEdits(e)
-    })
-    .catch(() => {})
-    .finally(() => setLoading(false))
+  const load = () => {
+    setLoading(true)
+    api.getIntegrations().then(setItems).catch(e => setError(e.message)).finally(() => setLoading(false))
+  }
+  useEffect(load, [])
 
-  useEffect(() => { load() }, [])
-
-  const save = async (appName: string) => {
-    const edit = edits[appName]
-    await api.setIntegration(appName, { base_url: edit.base_url, suite_token: edit.suite_token, enabled: true })
-    load()
+  const del = async (i: Integration) => {
+    try {
+      await api.deleteIntegration(i.id)
+      setConfirm(null)
+      load()
+    } catch (e: any) {
+      setError(e.message)
+    }
   }
 
-  const test = async (appName: string) => {
-    const result = await api.testIntegration(appName)
-    setTestResult(prev => ({ ...prev, [appName]: result.healthy ? `OK — ${result.detail}` : `Failed — ${result.detail}` }))
+  const test = async (i: Integration) => {
+    try {
+      const result = await api.testIntegration(i.id)
+      setTestResult(prev => ({ ...prev, [i.id]: result.healthy ? `OK — ${result.detail}` : `Failed — ${result.detail}` }))
+    } catch (e: any) {
+      setTestResult(prev => ({ ...prev, [i.id]: `Failed — ${e.message}` }))
+    }
+    load()
   }
 
   if (loading) return <p className="text-xs text-gray-500 animate-pulse py-3">Loading…</p>
 
   return (
-    <div className="space-y-4 py-3">
-      {items.map(i => (
-        <div key={i.app_name} className="bg-gray-800/40 border border-gray-800 rounded-lg p-4">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-white">{SIBLING_LABELS[i.app_name] ?? i.app_name}</p>
-            <span className={i.health_status === 'ok' ? 'text-xs text-green-400' : 'text-xs text-gray-500'}>{i.health_status}</span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-white block mb-1">Base URL</label>
-              <input
-                value={edits[i.app_name]?.base_url ?? ''}
-                onChange={e => setEdits(prev => ({ ...prev, [i.app_name]: { ...prev[i.app_name], base_url: e.target.value } }))}
-                placeholder="https://server:port"
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-white block mb-1">Suite Token (from that app's Settings)</label>
-              <input
-                value={edits[i.app_name]?.suite_token ?? ''}
-                onChange={e => setEdits(prev => ({ ...prev, [i.app_name]: { ...prev[i.app_name], suite_token: e.target.value } }))}
-                placeholder={i.has_token ? '•••••••• (already set)' : 'paste token'}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white"
-              />
-            </div>
-          </div>
-          <div className="flex items-center gap-3 mt-3">
-            <button onClick={() => save(i.app_name)} className="text-xs bg-sky-600 hover:bg-sky-500 text-white rounded-lg px-3 py-1.5">Save</button>
-            <button onClick={() => test(i.app_name)} className="text-xs text-white border border-gray-700 rounded-lg px-3 py-1.5 hover:bg-gray-800">Test Connection</button>
-            {testResult[i.app_name] && <span className="text-xs text-gray-400">{testResult[i.app_name]}</span>}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// -- Users tab ---------------------------------------------------------------------
-function UsersTab() {
-  const [users, setUsers] = useState<User[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'viewer' })
-
-  const load = () => {
-    setLoading(true)
-    api.getUsers().then(setUsers).catch(e => setError(e.message)).finally(() => setLoading(false))
-  }
-  useEffect(load, [])
-
-  const createUser = async () => {
-    try {
-      await api.createUser(newUser)
-      setNewUser({ username: '', email: '', password: '', role: 'viewer' })
-      load()
-    } catch (e: any) { setError(e.message) }
-  }
-  const updateRole = async (id: number, role: string) => { await api.updateUser(id, { role }); load() }
-  const toggleActive = async (u: User) => { await api.updateUser(u.id, { is_active: !u.is_active }); load() }
-  const removeUser = async (id: number) => { if (confirm('Delete this user?')) { await api.deleteUser(id); load() } }
-
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
-      <div className="flex items-center gap-2">
-        <p className="text-sm font-semibold text-white">Users</p>
-        <HelpButton title="Users — How It Works">
-          <p>Three roles: <span className="text-gray-300 font-medium">admin</span> (full access, including this Users tab, Collectors, and Integrations), <span className="text-gray-300 font-medium">analyst</span> (can edit access points, ack/resolve alerts), and <span className="text-gray-300 font-medium">viewer</span> (read-only).</p>
-          <p>This tab only manages <span className="text-gray-300 font-medium">local accounts</span> — SAML SSO users are auto-provisioned on first login.</p>
-        </HelpButton>
-      </div>
-
+    <div className="space-y-3 py-3">
       {error && (
         <div className="bg-red-900/30 border border-red-700/50 text-red-400 text-sm rounded-lg px-4 py-2 flex items-center justify-between">
           {error}<button onClick={() => setError('')} className="ml-4 text-red-600 hover:text-red-400">✕</button>
         </div>
       )}
 
+      {items.map(i => (
+        <div key={i.id} className="bg-gray-800/40 border border-gray-800 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <p className="text-sm font-medium text-white">{i.name}</p>
+              <p className="text-xs text-gray-500">{SIBLING_LABELS[i.app_name] ?? i.app_name} · {i.base_url || 'no URL set'}</p>
+            </div>
+            <span className={i.health_status === 'ok' ? 'text-xs text-green-400' : 'text-xs text-gray-500'}>{i.health_status}</span>
+          </div>
+          <div className="flex items-center gap-3 mt-2">
+            <button onClick={() => test(i)} className="text-xs text-white border border-gray-700 rounded-lg px-3 py-1.5 hover:bg-gray-800">Test Connection</button>
+            <button onClick={() => setModal(i)} className="text-xs text-white hover:text-sky-400">Edit</button>
+            <button onClick={() => setConfirm(i)} className="text-xs text-white hover:text-red-400">Delete</button>
+            {testResult[i.id] && <span className="text-xs text-gray-400">{testResult[i.id]}</span>}
+          </div>
+        </div>
+      ))}
+      {items.length === 0 && <p className="text-sm text-gray-500 py-2">No sibling pkt app connections yet.</p>}
+
+      <button onClick={() => setModal('new')}
+        className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white text-sm rounded-lg transition-colors">
+        <span className="text-base leading-none">+</span> Add Connection
+      </button>
+
+      {modal !== null && (
+        <IntegrationFormModal integration={modal === 'new' ? null : modal} onClose={() => setModal(null)}
+          onSaved={() => { setModal(null); load() }} />
+      )}
+
+      {confirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setConfirm(null)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-sm w-full" onClick={e => e.stopPropagation()}>
+            <h3 className="text-white font-semibold mb-2">Delete connection?</h3>
+            <p className="text-white text-sm mb-5">
+              Remove <strong className="text-white">{confirm.name}</strong>? Any feature using it (e.g. AP inventory
+              from pktsnmp, syslog proxying from pktLog) will stop working until reconfigured.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setConfirm(null)} className="px-4 py-2 text-sm text-white">Cancel</button>
+              <button onClick={() => del(confirm)} className="px-4 py-2 text-sm bg-red-600 hover:bg-red-500 text-white rounded-lg">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// -- User Keys tab (personal, per-user external API keys) -------------------------
+function ApiKeysTab({ lucidToken, onLucidChange, lucidSave }: {
+  lucidToken: string
+  onLucidChange: (v: string) => void
+  lucidSave: { saving: boolean; saved: boolean; error: string; save: () => Promise<void> }
+}) {
+  const { user } = useAuth()
+  const [keys, setKeys]       = useState<UserApiKey[]>([])
+  const [loading, setLoading] = useState(true)
+  const [drafts, setDrafts]   = useState<Record<string, string>>({})
+  const [saving, setSaving]   = useState<Record<string, boolean>>({})
+  const [saved, setSaved]     = useState<Record<string, boolean>>({})
+  const [error, setError]     = useState<Record<string, string>>({})
+  const [testing, setTesting] = useState<Record<string, boolean>>({})
+  const [testResult, setTestResult] = useState<Record<string, { ok: boolean; detail: string }>>({})
+
+  function load() {
+    setLoading(true)
+    api.getUserApiKeys()
+      .then(rows => { setKeys(rows); setDrafts(Object.fromEntries(rows.map(r => [r.provider, r.api_key]))) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleSave(provider: string) {
+    setSaving(s => ({ ...s, [provider]: true }))
+    setError(e => ({ ...e, [provider]: '' }))
+    try {
+      const updated = await api.setUserApiKey(provider, drafts[provider] ?? '')
+      setKeys(prev => prev.map(k => k.provider === provider ? updated : k))
+      setSaved(s => ({ ...s, [provider]: true }))
+      setTimeout(() => setSaved(s => ({ ...s, [provider]: false })), 2000)
+    } catch (err: any) {
+      setError(e => ({ ...e, [provider]: err.message ?? 'Save failed' }))
+    } finally {
+      setSaving(s => ({ ...s, [provider]: false }))
+    }
+  }
+
+  async function handleTest(provider: string) {
+    setTesting(t => ({ ...t, [provider]: true }))
+    setTestResult(r => ({ ...r, [provider]: undefined as any }))
+    try {
+      const res = await api.testUserApiKey(provider, drafts[provider] ?? '')
+      setTestResult(r => ({ ...r, [provider]: { ok: res.status === 'ok', detail: res.detail } }))
+    } catch (err: any) {
+      setTestResult(r => ({ ...r, [provider]: { ok: false, detail: err.message ?? 'Test failed' } }))
+    } finally {
+      setTesting(t => ({ ...t, [provider]: false }))
+    }
+  }
+
+  const inp = 'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono'
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-2">
+        <h2 className="text-lg font-semibold text-white">User Keys</h2>
+        <HelpButton title="User Keys — How It Works">
+          <p>External API keys for lookup tools (IP reputation, geolocation, etc.) are <span className="text-gray-300 font-medium">personal, not shared</span> — each user stores their own key here under their own account, and only that user's own requests use it. Nobody else, including admins, can see the key's value.</p>
+          <p>Leave a field blank and save to clear a key.</p>
+        </HelpButton>
+      </div>
+      <p className="text-sm text-white">
+        Signed in as <span className="text-white font-medium">{user?.username}</span> — these keys apply to your account only.
+      </p>
+
       {loading ? (
         <p className="text-sm text-white">Loading…</p>
       ) : (
-        <table className="w-full text-sm">
-          <thead className="text-gray-400 text-left">
-            <tr>
-              <th className="py-1 font-medium">Username</th>
-              <th className="py-1 font-medium">Email</th>
-              <th className="py-1 font-medium">Role</th>
-              <th className="py-1 font-medium">Active</th>
-              <th className="py-1 font-medium"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map(u => (
-              <tr key={u.id} className="border-t border-gray-800">
-                <td className="py-1.5 text-white">{u.username}</td>
-                <td className="py-1.5 text-gray-300">{u.email}</td>
-                <td className="py-1.5">
-                  <select value={u.role} onChange={e => updateRole(u.id, e.target.value)}
-                    className="bg-gray-800 border border-gray-700 text-white text-xs rounded-lg px-2 py-1">
-                    <option value="admin">admin</option>
-                    <option value="analyst">analyst</option>
-                    <option value="viewer">viewer</option>
-                  </select>
-                </td>
-                <td className="py-1.5">
-                  <button onClick={() => toggleActive(u)} className={`text-xs px-2 py-1 rounded-md ${u.is_active ? 'bg-green-500/20 text-green-300' : 'bg-gray-700 text-gray-400'}`}>
-                    {u.is_active ? 'Active' : 'Disabled'}
-                  </button>
-                </td>
-                <td className="py-1.5 text-right">
-                  <button onClick={() => removeUser(u.id)} className="text-xs text-red-400 hover:text-red-300">Delete</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="space-y-4 max-w-lg">
+          {keys.map(k => (
+            <div key={k.provider}>
+              <label className="block text-xs text-white mb-1">{k.label}</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="password"
+                  value={drafts[k.provider] ?? ''}
+                  onChange={e => setDrafts(d => ({ ...d, [k.provider]: e.target.value }))}
+                  placeholder="Not set"
+                  className={inp}
+                />
+                <button
+                  onClick={() => handleTest(k.provider)}
+                  disabled={testing[k.provider] || !(drafts[k.provider] ?? '').trim()}
+                  className="shrink-0 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors disabled:opacity-50"
+                >
+                  {testing[k.provider] ? 'Testing…' : 'Test'}
+                </button>
+                <button
+                  onClick={() => handleSave(k.provider)}
+                  disabled={saving[k.provider]}
+                  className="shrink-0 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+                >
+                  {saving[k.provider] ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+              {saved[k.provider] && <p className="text-xs text-green-400 mt-1">Saved</p>}
+              {error[k.provider] && <p className="text-xs text-red-400 mt-1">{error[k.provider]}</p>}
+              {testResult[k.provider] && (
+                <p className={`text-xs mt-1 ${testResult[k.provider].ok ? 'text-green-400' : 'text-red-400'}`}>
+                  {testResult[k.provider].ok ? '✓ ' : '✗ '}{testResult[k.provider].detail}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 pt-2">
-        <input placeholder="username" value={newUser.username} onChange={e => setNewUser({ ...newUser, username: e.target.value })}
-          className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white" />
-        <input placeholder="email" value={newUser.email} onChange={e => setNewUser({ ...newUser, email: e.target.value })}
-          className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white" />
-        <input placeholder="password" type="password" value={newUser.password} onChange={e => setNewUser({ ...newUser, password: e.target.value })}
-          className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white" />
-        <select value={newUser.role} onChange={e => setNewUser({ ...newUser, role: e.target.value })}
-          className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-white">
-          <option value="admin">admin</option>
-          <option value="analyst">analyst</option>
-          <option value="viewer">viewer</option>
-        </select>
+      <div className="pt-2 border-t border-gray-800 max-w-lg">
+        <p className="text-xs font-semibold text-white uppercase tracking-wider mt-4 mb-1">Lucidchart</p>
+        <label className="block text-xs text-white mb-1">API token</label>
+        <div className="flex items-center gap-2">
+          <input
+            type="password"
+            value={lucidToken}
+            onChange={e => onLucidChange(e.target.value)}
+            placeholder="eyJ…"
+            className={inp}
+          />
+          <button
+            onClick={lucidSave.save}
+            disabled={lucidSave.saving}
+            className="shrink-0 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+          >
+            {lucidSave.saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+        {lucidSave.saved && <p className="text-xs text-green-400 mt-1">Saved</p>}
+        {lucidSave.error && <p className="text-xs text-red-400 mt-1">{lucidSave.error}</p>}
+        <p className="text-xs text-gray-500 mt-1">Personal Access Token from lucid.co → Account → API Tokens. Enables exporting diagrams into Lucidchart.</p>
       </div>
-      <button onClick={createUser} className="text-xs bg-sky-600 hover:bg-sky-500 text-white rounded-lg px-3 py-1.5">Add user</button>
+    </div>
+  )
+}
+
+// -- Users tab ---------------------------------------------------------------------
+function badge(active: boolean) {
+  return active
+    ? 'bg-green-900/40 text-green-400 border border-green-700/40'
+    : 'bg-gray-800 text-white border border-gray-700'
+}
+
+function roleBadge(role: string) {
+  const map: Record<string, string> = {
+    admin:   'bg-sky-900/40 text-sky-300 border border-sky-700/40',
+    viewer:  'bg-gray-800 text-white border border-gray-700',
+    analyst: 'bg-purple-900/40 text-purple-300 border border-purple-700/40',
+  }
+  return map[role] ?? 'bg-gray-800 text-white border border-gray-700'
+}
+
+interface UserModalProps {
+  user?: User | null
+  onClose: () => void
+  onSaved: () => void
+}
+
+function UserModal({ user, onClose, onSaved }: UserModalProps) {
+  const editing = !!user
+  const [form, setForm] = useState<UserIn>({
+    username: user?.username ?? '',
+    email:    user?.email ?? '',
+    role:     user?.role ?? 'viewer',
+    password: '',
+  })
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const set = (k: keyof UserIn, v: string) => setForm(f => ({ ...f, [k]: v }))
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editing && !form.password) { setError('Password required for new users'); return }
+    setSaving(true)
+    try {
+      const payload = { ...form, password: form.password || undefined }
+      if (editing) await api.updateUser(user!.id, payload)
+      else         await api.createUser(payload)
+      onSaved()
+    } catch (err: any) {
+      setError(err.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-white mb-5">{editing ? `Edit — ${user!.username}` : 'New User'}</h2>
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-xs text-white block mb-1">Username</label>
+            <input value={form.username} onChange={e => set('username', e.target.value)} required
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="text-xs text-white block mb-1">Email</label>
+            <input type="email" value={form.email} onChange={e => set('email', e.target.value)} required
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="text-xs text-white block mb-1">
+              Password {editing && <span className="text-white">(leave blank to keep current)</span>}
+            </label>
+            <input type="password" value={form.password} onChange={e => set('password', e.target.value)}
+              placeholder={editing ? '••••••••' : 'Required'}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="text-xs text-white block mb-1">Role</label>
+            <select value={form.role} onChange={e => set('role', e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500">
+              <option value="admin">admin</option>
+              <option value="analyst">analyst</option>
+              <option value="viewer">viewer</option>
+            </select>
+          </div>
+          {error && <p className="text-red-400 text-xs">{error}</p>}
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose}
+              className="px-4 py-2 text-sm text-white hover:text-white transition-colors">
+              Cancel
+            </button>
+            <button type="submit" disabled={saving}
+              className="px-4 py-2 text-sm bg-sky-600 hover:bg-sky-500 text-white rounded-lg transition-colors disabled:opacity-50">
+              {saving ? 'Saving…' : (editing ? 'Save Changes' : 'Create User')}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+interface ResetPwProps { user: User; onClose: () => void }
+
+function ResetPasswordModal({ user, onClose }: ResetPwProps) {
+  const [pw, setPw] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (pw.length < 6) { setErr('Password must be at least 6 characters'); return }
+    if (pw !== confirmPw) { setErr('Passwords do not match'); return }
+    setSaving(true)
+    try {
+      await api.resetUserPassword(user.id, pw)
+      onClose()
+    } catch (e: any) {
+      setErr(e.message ?? 'Failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-white mb-1">Reset Password</h2>
+        <p className="text-sm text-white mb-5">Set a new password for <span className="text-white font-medium">{user.username}</span></p>
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-xs text-white block mb-1">New Password</label>
+            <input type="password" value={pw} onChange={e => setPw(e.target.value)} required autoFocus
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="text-xs text-white block mb-1">Confirm Password</label>
+            <input type="password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)} required
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500" />
+          </div>
+          {err && <p className="text-red-400 text-xs">{err}</p>}
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-white hover:text-white transition-colors">Cancel</button>
+            <button type="submit" disabled={saving}
+              className="px-4 py-2 text-sm bg-sky-600 hover:bg-sky-500 text-white rounded-lg transition-colors disabled:opacity-50">
+              {saving ? 'Saving…' : 'Set Password'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function UsersTab() {
+  const { user: me } = useAuth()
+  const [users, setUsers] = useState<User[]>([])
+  const [loading, setLoading] = useState(true)
+  const [modal, setModal]   = useState<'create' | User | null>(null)
+  const [confirm, setConfirm] = useState<User | null>(null)
+  const [resetPw, setResetPw] = useState<User | null>(null)
+  const [error, setError]   = useState('')
+  const [userFilter, setUserFilter]     = useState('')
+  const [userSortKey, setUserSortKey]   = useState<keyof User | null>(null)
+  const [userSortDir, setUserSortDir]   = useState<'asc' | 'desc'>('asc')
+
+  const toggleUserSort = (key: keyof User) => {
+    if (userSortKey === key) setUserSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setUserSortKey(key); setUserSortDir('asc') }
+  }
+
+  const load = () => {
+    setLoading(true)
+    api.getUsers().then(setUsers).catch(e => setError(e.message)).finally(() => setLoading(false))
+  }
+
+  useEffect(load, [])
+
+  const toggle = async (u: User) => {
+    try {
+      await api.updateUser(u.id, { is_active: !u.is_active })
+      load()
+    } catch (e: any) { setError(e.message) }
+  }
+
+  const del = async (u: User) => {
+    try {
+      await api.deleteUser(u.id)
+      setConfirm(null)
+      load()
+    } catch (e: any) { setError(e.message) }
+  }
+
+  const makeDefaultAdmin = async (u: User) => {
+    try {
+      await api.setDefaultAdmin(u.id)
+      load()
+    } catch (e: any) { setError(e.message) }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <p className="text-sm font-semibold text-white">Users</p>
+        <HelpButton title="Users — How It Works">
+          <p>Three roles: <span className="text-gray-300 font-medium">admin</span> (full access, including this Users tab, Collectors, and Integrations), <span className="text-gray-300 font-medium">analyst</span> (can edit access points, ack/resolve alerts), and <span className="text-gray-300 font-medium">viewer</span> (read-only).</p>
+          <p>This tab only manages <span className="text-gray-300 font-medium">local accounts</span> — SAML SSO users are auto-provisioned on first login.</p>
+          <p><span className="text-gray-300 font-medium">Deactivate</span> blocks login immediately without deleting the account or its history — prefer it over Delete for someone who's just leaving temporarily, since Delete is permanent.</p>
+          <p>The <span className="text-yellow-400">★</span> marks the <span className="text-gray-300 font-medium">default admin</span> — when every auth method in the Auth tab is disabled, the app skips the login page entirely and signs everyone in as this account. Click the star on any active admin to reassign it.</p>
+        </HelpButton>
+      </div>
+      <div className="flex items-center gap-3 flex-wrap">
+        <p className="text-xs text-gray-500">Local accounts only — SAML SSO users are managed in your IdP</p>
+        <div className="flex items-center gap-2 ml-auto">
+          <input
+            value={userFilter}
+            onChange={e => setUserFilter(e.target.value)}
+            placeholder="Filter users…"
+            className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-gray-600 w-40 focus:outline-none focus:ring-1 focus:ring-sky-500"
+          />
+          {userFilter && <button onClick={() => setUserFilter('')} className="text-xs text-white hover:text-white">✕</button>}
+          <button onClick={() => setModal('create')}
+            className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white text-sm rounded-lg transition-colors">
+            <span className="text-base leading-none">+</span> Add User
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-900/30 border border-red-700/50 text-red-400 text-sm rounded-lg px-4 py-2 flex items-center justify-between">
+          {error}
+          <button onClick={() => setError('')} className="ml-4 text-red-600 hover:text-red-400">✕</button>
+        </div>
+      )}
+
+      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+        {loading ? (
+          <div className="flex items-center justify-center h-32 text-white text-sm">Loading…</div>
+        ) : (
+          (() => {
+            const USER_COLS: Array<{ label: string; key: keyof User | null; cls?: string }> = [
+              { label: 'User',       key: 'username' },
+              { label: 'Email',      key: 'email' },
+              { label: 'Role',       key: 'role' },
+              { label: 'Status',     key: 'is_active' },
+              { label: 'Last Login', key: 'last_login' },
+              { label: '',           key: null, cls: 'px-5 py-3' },
+            ]
+            const displayedUsers = users
+              .filter(u => {
+                if (!userFilter) return true
+                const q = userFilter.toLowerCase()
+                return u.username.toLowerCase().includes(q) ||
+                  u.email.toLowerCase().includes(q) ||
+                  u.role.toLowerCase().includes(q)
+              })
+              .sort((a, b) => {
+                if (!userSortKey) return 0
+                const av = a[userSortKey] as any
+                const bv = b[userSortKey] as any
+                if (typeof av === 'boolean') return userSortDir === 'asc' ? (av ? 1 : 0) - (bv ? 1 : 0) : (bv ? 1 : 0) - (av ? 1 : 0)
+                if (typeof av === 'number') return userSortDir === 'asc' ? av - bv : bv - av
+                return userSortDir === 'asc'
+                  ? String(av ?? '').localeCompare(String(bv ?? ''))
+                  : String(bv ?? '').localeCompare(String(av ?? ''))
+              })
+            return (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-800">
+                {USER_COLS.map(col => (
+                  <th
+                    key={col.label}
+                    onClick={() => col.key && toggleUserSort(col.key)}
+                    className={`text-left px-5 py-3 text-xs font-medium uppercase tracking-wider select-none
+                      ${col.key ? `cursor-pointer ${userSortKey === col.key ? 'text-sky-400' : 'text-white hover:text-gray-200'}` : (col.cls ?? 'text-white')}`}
+                  >
+                    {col.label}
+                    {userSortKey === col.key && col.key && <span className="ml-1">{userSortDir === 'asc' ? '↑' : '↓'}</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800/60">
+              {displayedUsers.map(u => (
+                <tr key={u.id} className="hover:bg-gray-800/30 transition-colors">
+                  <td className="px-5 py-3.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-7 h-7 rounded-full bg-sky-700/50 flex items-center justify-center text-xs font-bold text-sky-300">
+                        {u.username[0].toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-white font-medium">{u.username}</p>
+                          <button
+                            onClick={() => !u.is_default_admin && u.role === 'admin' && u.is_active && makeDefaultAdmin(u)}
+                            disabled={u.is_default_admin || u.role !== 'admin' || !u.is_active}
+                            title={u.is_default_admin
+                              ? 'Default admin — auto-logged-in when all auth methods are disabled'
+                              : (u.role === 'admin' && u.is_active ? 'Make default admin' : 'Only active admins can be the default admin')}
+                            className={`text-sm leading-none ${u.is_default_admin ? 'text-yellow-400' : 'text-gray-500 hover:text-gray-300 disabled:hover:text-gray-500'}`}
+                          >
+                            {u.is_default_admin ? '★' : '☆'}
+                          </button>
+                        </div>
+                        {u.username === me?.username && <p className="text-xs text-white">you</p>}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-5 py-3.5 text-white">{u.email}</td>
+                  <td className="px-5 py-3.5">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${roleBadge(u.role)}`}>
+                      {u.role}
+                    </span>
+                  </td>
+                  <td className="px-5 py-3.5">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${badge(u.is_active)}`}>
+                      {u.is_active ? 'Active' : 'Disabled'}
+                    </span>
+                  </td>
+                  <td className="px-5 py-3.5 text-white text-xs">
+                    {u.last_login
+                      ? new Date(u.last_login.includes('T') || u.last_login.endsWith('Z') ? u.last_login : u.last_login.replace(' ', 'T') + 'Z').toLocaleString()
+                      : 'Never'}
+                  </td>
+                  <td className="px-5 py-3.5">
+                    <div className="flex items-center justify-end gap-1">
+                      <button onClick={() => setResetPw(u)} title="Reset Password"
+                        className="p-1.5 text-white hover:text-purple-400 hover:bg-purple-900/20 rounded transition-colors">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/>
+                        </svg>
+                      </button>
+                      <button onClick={() => setModal(u)} title="Edit"
+                        className="p-1.5 text-white hover:text-sky-400 hover:bg-sky-900/20 rounded transition-colors">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125"/>
+                        </svg>
+                      </button>
+                      {u.username !== me?.username && (
+                        <button onClick={() => toggle(u)} title={u.is_active ? 'Disable' : 'Enable'}
+                          className={`p-1.5 rounded transition-colors ${
+                            u.is_active
+                              ? 'text-white hover:text-yellow-400 hover:bg-yellow-900/20'
+                              : 'text-white hover:text-green-400 hover:bg-green-900/20'
+                          }`}>
+                          {u.is_active
+                            ? <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                            : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                          }
+                        </button>
+                      )}
+                      {u.username !== me?.username && (
+                        <button onClick={() => setConfirm(u)} title="Delete"
+                          className="p-1.5 text-white hover:text-red-400 hover:bg-red-900/20 rounded transition-colors">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+            )
+          })()
+        )}
+      </div>
+
+      <p className="text-xs text-white">
+        Roles: <strong className="text-white">admin</strong> — full access &nbsp;·&nbsp;
+        <strong className="text-white">analyst</strong> — read + export &nbsp;·&nbsp;
+        <strong className="text-white">viewer</strong> — read-only
+      </p>
+
+      {resetPw && <ResetPasswordModal user={resetPw} onClose={() => setResetPw(null)} />}
+
+      {modal !== null && (
+        <UserModal
+          user={modal === 'create' ? null : modal}
+          onClose={() => setModal(null)}
+          onSaved={() => { setModal(null); load() }}
+        />
+      )}
+
+      {confirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-sm w-full">
+            <h3 className="text-white font-semibold mb-2">Delete user?</h3>
+            <p className="text-white text-sm mb-5">
+              <strong className="text-white">{confirm.username}</strong> will be permanently removed.
+              This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setConfirm(null)}
+                className="px-4 py-2 text-sm text-white hover:text-white">Cancel</button>
+              <button onClick={() => del(confirm)}
+                className="px-4 py-2 text-sm bg-red-600 hover:bg-red-500 text-white rounded-lg">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // -- Main page ---------------------------------------------------------------------
-type TabId = 'general' | 'auth' | 'backup' | 'integrations' | 'users' | 'system'
+type TabId = 'general' | 'security' | 'data' | 'notifications' | 'apikeys' | 'system'
 
-const TABS: Array<{ id: TabId; label: string; adminOnly?: boolean }> = [
-  { id: 'general',      label: 'General' },
-  { id: 'auth',         label: 'Authentication' },
-  { id: 'backup',       label: 'Backup' },
-  { id: 'integrations', label: 'Integrations' },
-  { id: 'users',        label: 'Users', adminOnly: true },
-  { id: 'system',       label: 'System' },
+const TABS: Array<{ id: TabId; label: string; adminOnly?: boolean; gapBefore?: boolean }> = [
+  { id: 'general',       label: 'General' },
+  { id: 'security',      label: 'Security' },
+  { id: 'data',          label: 'Data' },
+  { id: 'notifications', label: 'Notifications' },
+  { id: 'apikeys',       label: 'User Keys' },
+  { id: 'system',        label: 'System', gapBefore: true },
+]
+
+// -- Security tab — its own left-hand vertical tab strip --------------------------
+// No AI Assistant or SSL/TLS sub-tabs: neither feature exists in pktWiFi yet.
+// Suite Integration bundles both directions: the inbound Suite Token (pktHub
+// calling into pktWiFi) and the outbound Sibling pkt Apps connections
+// (pktWiFi calling into pktsnmp/pktflow/pktlog/pktpcap) — same pairing the
+// old Integrations tab already had, just relocated as one unit.
+type SecurityTabId = 'users' | 'auth' | 'suite' | 'ai' | 'ssl'
+const SECURITY_TABS: Array<{ id: SecurityTabId; label: string; adminOnly?: boolean }> = [
+  { id: 'users', label: 'Users', adminOnly: true },
+  { id: 'auth',  label: 'Auth' },
+  { id: 'suite', label: 'Suite Integration' },
+  { id: 'ai',    label: 'AI Assistant' },
+  { id: 'ssl',   label: 'SSL / TLS' },
+]
+
+// -- Data tab — its own left-hand vertical tab strip -------------------------------
+// Backups only: no storage-backend picker exists in pktWiFi yet (SQLite only).
+type DataTabId = 'storage' | 'backups'
+const DATA_TABS: Array<{ id: DataTabId; label: string }> = [
+  { id: 'storage', label: 'Storage' },
+  { id: 'backups', label: 'Backups' },
 ]
 
 export default function Settings() {
   const { user: me } = useAuth()
   const isAdmin = me?.role === 'admin'
   const [tab, setTab] = useState<TabId>('general')
+  const [securityTab, setSecurityTab] = useState<SecurityTabId>(isAdmin ? 'users' : 'auth')
+  const [dataTab, setDataTab] = useState<DataTabId>('storage')
   const [settings, setSettings] = useState<SettingsMap>({})
   const [loading, setLoading] = useState(true)
   const dirtyRef = useRef(false)
@@ -549,13 +1173,54 @@ export default function Settings() {
   const num  = (k: string, fallback = 0)  => (settings[k] as number) ?? fallback
   const bool = (k: string, fallback = false) => (settings[k] as boolean) ?? fallback
 
-  const generalSave = useSave(['app_name', 'base_url', 'timezone'], settings, load)
+  // General tab's Port field lives in config.yaml (not the SQLite settings
+  // blob) so it needs its own fetch, but saves through the same one button.
+  const [portValue, setPortValue]   = useState(0)
+  const [portLoaded, setPortLoaded] = useState(false)
+  useEffect(() => {
+    api.getPort().then((r: { port: number }) => setPortValue(r.port)).catch(() => {}).finally(() => setPortLoaded(true))
+  }, [])
+
+  const [generalSaving, setGeneralSaving] = useState(false)
+  const [generalSaved, setGeneralSaved]   = useState(false)
+  const [generalError, setGeneralError]   = useState('')
+
+  const saveGeneral = async () => {
+    if (portValue < 1 || portValue > 65535) { setGeneralError('Enter a port between 1 and 65535'); return }
+    setGeneralSaving(true); setGeneralSaved(false); setGeneralError('')
+    try {
+      const subset: SettingsMap = {}
+      for (const k of ['app_name', 'base_url', 'timezone']) if (k in settings) subset[k] = settings[k]
+      await api.updateSettings(subset)
+      await api.setPort(portValue)
+      await load()
+      setGeneralSaved(true)
+      setTimeout(() => setGeneralSaved(false), 3000)
+    } catch (e: any) {
+      setGeneralError(e.message || 'Save failed')
+    } finally {
+      setGeneralSaving(false)
+    }
+  }
   const authSave = useSave([
-    'auth_local_enabled',
+    'auth_local_enabled', 'session_timeout_minutes',
     'okta_saml_enabled', 'okta_saml_idp_entity_id', 'okta_saml_idp_sso_url',
     'okta_saml_idp_cert', 'okta_saml_sp_entity_id', 'okta_saml_sp_cert', 'okta_saml_sp_key',
   ], settings, load)
+  const storageSave = useSave(['alert_event_retention_days', 'radio_metrics_retention_days'], settings, load)
   const backupSave = useSave(['backup_enabled', 'backup_interval_hours', 'backup_rotation_count', 'backup_path'], settings, load)
+  const aiAssistantSave = useSave(['anthropic_api_key', 'ai_model'], settings, load)
+  const lucidSave = useSave(['lucid_api_token'], settings, load)
+  const notifySave = useSave([
+    'notify_slack_enabled', 'notify_slack_webhook_url', 'notify_slack_channel',
+    'notify_email_enabled', 'notify_email_smtp_host', 'notify_email_smtp_port',
+    'notify_email_smtp_tls', 'notify_email_username', 'notify_email_password',
+    'notify_email_from', 'notify_email_default_to',
+    'notify_pagerduty_enabled', 'notify_pagerduty_integration_key',
+    'notify_webhook_enabled', 'notify_webhook_url',
+    'notify_webhook_method', 'notify_webhook_payload_template',
+    'notify_tracecat_enabled', 'notify_tracecat_webhook_url', 'notify_tracecat_api_token',
+  ], settings, load)
 
   const [backupRunning, setBackupRunning] = useState(false)
   const [backupResult, setBackupResult] = useState<string | null>(null)
@@ -581,6 +1246,22 @@ export default function Settings() {
     try { setBackups(await api.listBackups()); setBackupsLoaded(true) } catch {}
   }
 
+  const [cleanupRunning, setCleanupRunning] = useState(false)
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null)
+  const runCleanup = async () => {
+    setCleanupRunning(true)
+    setCleanupResult(null)
+    try {
+      const r = await api.runCleanup()
+      const parts: string[] = []
+      parts.push(r.alerts_deleted > 0 ? `${r.alerts_deleted} resolved alert(s) removed` : 'No alerts beyond retention threshold')
+      parts.push(r.metrics_deleted > 0 ? `${r.metrics_deleted} RF metric row(s) removed` : 'No RF metrics beyond retention threshold')
+      setCleanupResult(parts.join(' · '))
+    } catch (e: any) {
+      setCleanupResult(`Error: ${e.message}`)
+    } finally { setCleanupRunning(false) }
+  }
+
   if (loading) {
     return <div className="flex items-center justify-center h-48 text-white"><p className="text-sm">Loading settings…</p></div>
   }
@@ -589,27 +1270,30 @@ export default function Settings() {
     <div className="space-y-4">
       <h1 className="text-xl font-bold text-white">Settings</h1>
 
-      <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1 w-fit overflow-x-auto">
+      <div className="flex items-center gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1 w-fit overflow-x-auto">
         {TABS.filter(t => !t.adminOnly || isAdmin).map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
-            className={`text-sm px-4 py-1.5 rounded-lg whitespace-nowrap transition-colors ${tab === t.id ? 'bg-gray-700 text-white' : 'text-white hover:text-white'}`}>
-            {t.label}
-          </button>
+          <Fragment key={t.id}>
+            {t.gapBefore && <div className="w-px self-stretch bg-gray-700 mx-2" />}
+            <button onClick={() => setTab(t.id)}
+              className={`text-sm px-4 py-1.5 rounded-lg whitespace-nowrap transition-colors ${tab === t.id ? 'bg-gray-700 text-white' : 'text-white hover:text-white'}`}>
+              {t.label}
+            </button>
+          </Fragment>
         ))}
       </div>
 
       {tab === 'general' && (
-        <Section title="General" onSave={generalSave.save} saving={generalSave.saving} saved={generalSave.saved} error={generalSave.error}
+        <Section title="General" onSave={saveGeneral} saving={generalSaving} saved={generalSaved} error={generalError}
           help={{
             title: 'General — How It Works',
-            content: <p><span className="text-gray-300 font-medium">Base URL</span> feeds the SAML ACS/metadata URLs on the Authentication tab — set it to the actual externally-reachable address before configuring SSO, or those will point at the wrong place.</p>,
+            content: <>
+              <p><span className="text-gray-300 font-medium">Base URL</span> feeds the SAML ACS/metadata URLs on the Auth tab — set it to the actual externally-reachable address before configuring SSO, or those will point at the wrong place.</p>
+              <p><span className="text-gray-300 font-medium">Port</span> only takes effect after a restart. Changing it moves the app to a new URL; the browser won't follow automatically.</p>
+            </>,
           }}
         >
           <Field label="App name" hint="Displayed in browser tab and header">
             <TextInput value={str('app_name', 'pktWiFi')} onChange={v => set('app_name', v)} />
-          </Field>
-          <Field label="Base URL" hint="Used for SAML redirect URIs">
-            <TextInput value={str('base_url')} onChange={v => set('base_url', v)} placeholder="http://SERVER-IP:8769" />
           </Field>
           <Field label="Timezone" hint="Affects display of timestamps in the UI">
             <SelectInput
@@ -624,71 +1308,231 @@ export default function Settings() {
               ]}
             />
           </Field>
+          <PortField value={portValue} onChange={setPortValue} loaded={portLoaded} />
+          <Field label="Base URL" hint="Used for SAML redirect URIs">
+            <TextInput value={str('base_url')} onChange={v => set('base_url', v)} placeholder="http://SERVER-IP:8769" />
+          </Field>
+          <RestartServiceRow />
         </Section>
       )}
 
-      {tab === 'auth' && (
-        <Section title="Authentication" onSave={authSave.save} saving={authSave.saving} saved={authSave.saved} error={authSave.error}
+      {/* Security */}
+      {tab === 'security' && (
+        <div className="flex gap-4 items-start">
+          <div className="flex flex-col gap-1.5 w-48 flex-shrink-0">
+            {SECURITY_TABS.filter(st => !st.adminOnly || isAdmin).map(st => (
+              <button
+                key={st.id}
+                onClick={() => setSecurityTab(st.id)}
+                className={`text-sm px-4 py-2 rounded-lg border text-left whitespace-nowrap transition-colors ${
+                  securityTab === st.id
+                    ? 'bg-gray-800 border-sky-500 text-white'
+                    : 'bg-gray-900 border-gray-800 text-white hover:border-gray-600'
+                }`}
+              >
+                {st.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            {securityTab === 'users' && isAdmin && <UsersTab />}
+
+            {securityTab === 'auth' && (
+              <Section title="Authentication" onSave={authSave.save} saving={authSave.saving} saved={authSave.saved} error={authSave.error}
+                help={{
+                  title: 'Authentication — How It Works',
+                  content: <>
+                    <p><span className="text-gray-300 font-medium">Local auth</span> and <span className="text-gray-300 font-medium">SAML SSO</span> aren't mutually exclusive — both can be on at once.</p>
+                    <p>SAML users are <span className="text-gray-300 font-medium">auto-provisioned</span> on first successful login — no separate "create user" step.</p>
+                    <p>Paste your IdP's metadata XML to auto-fill the fields below, then register the <span className="text-gray-300 font-medium">ACS URL</span> shown here as the Single Sign-On URL in your IdP. Both the ACS URL and SP metadata link derive from <span className="text-gray-300 font-medium">Base URL</span> on the General tab — set that correctly first.</p>
+                  </>,
+                }}
+              >
+                <Field label="Local auth" hint="Username/password login using local accounts">
+                  <Toggle value={bool('auth_local_enabled', true)} onChange={v => set('auth_local_enabled', v)} />
+                </Field>
+                <Field label="Session timeout">
+                  <div className="flex items-center gap-3">
+                    <NumberInput value={num('session_timeout_minutes', 480)} onChange={v => set('session_timeout_minutes', v)} min={5} max={10080} />
+                    <span className="text-sm text-white">minutes</span>
+                  </div>
+                </Field>
+
+                <div className="pt-4 pb-2">
+                  <p className="text-xs font-semibold text-white uppercase tracking-wider">SAML 2.0 SSO</p>
+                </div>
+                <Field label="Enable SAML SSO">
+                  <Toggle value={bool('okta_saml_enabled')} onChange={v => set('okta_saml_enabled', v)} />
+                </Field>
+                {bool('okta_saml_enabled') && (
+                  <>
+                    <Field label="Paste IdP Metadata XML" hint="Paste the full XML from your IdP's SAML app configuration. Fields below will auto-fill.">
+                      <MetadataPasteBox onParsed={r => {
+                        if (r.entity_id) set('okta_saml_idp_entity_id', r.entity_id)
+                        if (r.sso_url) set('okta_saml_idp_sso_url', r.sso_url)
+                        if (r.cert) set('okta_saml_idp_cert', r.cert)
+                      }} />
+                    </Field>
+                    <Field label="IdP Entity ID">
+                      <TextInput value={str('okta_saml_idp_entity_id')} onChange={v => set('okta_saml_idp_entity_id', v)} placeholder="https://idp.example.com/..." mono />
+                    </Field>
+                    <Field label="IdP SSO URL">
+                      <TextInput value={str('okta_saml_idp_sso_url')} onChange={v => set('okta_saml_idp_sso_url', v)} placeholder="https://idp.example.com/sso/saml" mono />
+                    </Field>
+                    <Field label="IdP X.509 Certificate" hint="PEM headers are stripped automatically">
+                      <CertTextarea value={str('okta_saml_idp_cert')} onChange={v => set('okta_saml_idp_cert', v)} rows={4} secret />
+                    </Field>
+                    <Field label="SP Entity ID" hint="Leave blank to use the auto-generated metadata URL">
+                      <TextInput value={str('okta_saml_sp_entity_id')} onChange={v => set('okta_saml_sp_entity_id', v)} placeholder={`${str('base_url')}/api/auth/saml/metadata`} mono />
+                    </Field>
+                    <Field label="ACS URL (read-only)" hint="Register this URL as the Single Sign-On URL in your IdP">
+                      <div className="flex items-center gap-2">
+                        <input readOnly value={`${str('base_url')}/api/auth/saml/callback`}
+                          className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-400 font-mono cursor-default" />
+                        <a href={`${str('base_url')}/api/auth/saml/metadata`} target="_blank" rel="noreferrer"
+                          className="text-xs text-sky-400 hover:text-sky-300 whitespace-nowrap">View SP metadata ↗</a>
+                      </div>
+                    </Field>
+                    <Field label="SP Certificate" hint="Optional: for signed authentication requests">
+                      <CertTextarea value={str('okta_saml_sp_cert')} onChange={v => set('okta_saml_sp_cert', v)} rows={3} placeholder="Leave blank if not signing requests" secret />
+                    </Field>
+                    <Field label="SP Private Key" hint="Optional: private key for signing requests (kept secret)">
+                      <CertTextarea value={str('okta_saml_sp_key')} onChange={v => set('okta_saml_sp_key', v)} rows={3} placeholder="Leave blank if not signing requests" secret />
+                    </Field>
+                  </>
+                )}
+              </Section>
+            )}
+
+            {securityTab === 'suite' && (
+              <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-2">
+                  <h2 className="text-sm font-semibold text-white">Suite Integration</h2>
+                  <HelpButton title="Suite Integration — How It Works">
+                    <p><span className="text-gray-300 font-medium">Suite Token</span> is one-directional discovery: copy it into pktHub's App Manager when registering this app, so pktHub can proxy into it with users already signed in.</p>
+                    <p><span className="text-gray-300 font-medium">Sibling pkt apps</span> below is the other direction: pktWiFi calling into pktsnmp/pktflow/pktlog/pktpcap to reuse data they've already collected. Paste each app's own suite token (from that app's Settings → Security → Suite Integration) here.</p>
+                  </HelpButton>
+                </div>
+                <div className="px-6 py-2">
+                  <SuiteTokenDisplay />
+                  <div className="pt-4 pb-1">
+                    <p className="text-xs font-semibold text-white uppercase tracking-wider">Sibling pkt Apps</p>
+                  </div>
+                  <SiblingIntegrations />
+                </div>
+              </div>
+            )}
+
+            {securityTab === 'ai' && (
+              <Section title="AI Assistant" onSave={aiAssistantSave.save} saving={aiAssistantSave.saving} saved={aiAssistantSave.saved} error={aiAssistantSave.error}
+                help={{
+                  title: 'AI Assistant — How It Works',
+                  content: <p><span className="text-gray-300 font-medium">AI Assistant</span> needs its own Anthropic API key (console.anthropic.com, separate from a Claude Enterprise seat) before the in-app chat panel does anything. Haiku is the default: fastest/cheapest for WiFi-context questions.</p>,
+                }}
+              >
+                <Field
+                  label="Anthropic API key"
+                  hint="Required for the in-app AI assistant. Get a key at console.anthropic.com. Separate from Claude Enterprise."
+                >
+                  <TextInput
+                    value={str('anthropic_api_key')}
+                    onChange={v => set('anthropic_api_key', v)}
+                    placeholder="sk-ant-…"
+                    secret
+                    mono
+                  />
+                </Field>
+                <Field label="AI model" hint="Model used for the assistant. Haiku is fast and cost-effective.">
+                  <SelectInput
+                    value={str('ai_model', 'claude-haiku-4-5-20251001')}
+                    onChange={v => set('ai_model', v)}
+                    options={[
+                      { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku (fast, low cost)' },
+                      { value: 'claude-sonnet-5', label: 'Claude Sonnet (balanced)' },
+                      { value: 'claude-opus-4-8', label: 'Claude Opus (most capable)' },
+                    ]}
+                  />
+                </Field>
+              </Section>
+            )}
+
+            {securityTab === 'ssl' && (
+              <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-2">
+                  <h2 className="text-sm font-semibold text-white">SSL / TLS</h2>
+                  <HelpButton title="SSL/TLS — How It Works">
+                    <p>Accepts either a combined PFX/P12 file or a separate PEM cert+key pair — the running service auto-detects and loads whichever was uploaded at startup.</p>
+                  </HelpButton>
+                </div>
+                <div className="px-6 py-4">
+                  <SslPanel />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Data */}
+      {tab === 'data' && (
+        <div className="flex gap-4 items-start">
+          <div className="flex flex-col gap-1.5 w-48 flex-shrink-0">
+            {DATA_TABS.map(dt => (
+              <button
+                key={dt.id}
+                onClick={() => setDataTab(dt.id)}
+                className={`text-sm px-4 py-2 rounded-lg border text-left whitespace-nowrap transition-colors ${
+                  dataTab === dt.id
+                    ? 'bg-gray-800 border-sky-500 text-white'
+                    : 'bg-gray-900 border-gray-800 text-white hover:border-gray-600'
+                }`}
+              >
+                {dt.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 min-w-0">
+      {dataTab === 'storage' && (
+        <Section title="Storage" onSave={storageSave.save} saving={storageSave.saving} saved={storageSave.saved} error={storageSave.error}
           help={{
-            title: 'Authentication — How It Works',
+            title: 'Storage — How It Works',
             content: <>
-              <p><span className="text-gray-300 font-medium">Local auth</span> and <span className="text-gray-300 font-medium">SAML SSO</span> aren't mutually exclusive — both can be on at once.</p>
-              <p>SAML users are <span className="text-gray-300 font-medium">auto-provisioned</span> on first successful login — no separate "create user" step.</p>
-              <p>Paste your IdP's metadata XML to auto-fill the fields below, then register the <span className="text-gray-300 font-medium">ACS URL</span> shown here as the Single Sign-On URL in your IdP. Both the ACS URL and SP metadata link derive from <span className="text-gray-300 font-medium">Base URL</span> on the General tab — set that correctly first.</p>
+              <p>pktWiFi stores everything in <span className="text-gray-300 font-medium">SQLite</span> — there's no separate analytical backend to choose here, unlike some sibling apps.</p>
+              <p>Retention windows control how long resolved alerts and raw RF metric history stick around before a background job deletes them. <span className="text-gray-300 font-medium">Manual cleanup</span> applies the current thresholds immediately instead of waiting for the next scheduled pass (once daily).</p>
             </>,
           }}
         >
-          <Field label="Local auth" hint="Username/password login using local accounts">
-            <Toggle value={bool('auth_local_enabled', true)} onChange={v => set('auth_local_enabled', v)} />
+          <Field label="Alert event retention" hint="Days to keep resolved alert events">
+            <div className="flex items-center gap-3">
+              <NumberInput value={num('alert_event_retention_days', 90)} onChange={v => set('alert_event_retention_days', v)} min={1} max={3650} />
+              <span className="text-sm text-white">days</span>
+            </div>
           </Field>
-
-          <div className="pt-4 pb-2">
-            <p className="text-xs font-semibold text-white uppercase tracking-wider">SAML 2.0 SSO</p>
-          </div>
-          <Field label="Enable SAML SSO">
-            <Toggle value={bool('okta_saml_enabled')} onChange={v => set('okta_saml_enabled', v)} />
+          <Field label="RF metrics retention" hint="Days to keep raw radio/RF metric history">
+            <div className="flex items-center gap-3">
+              <NumberInput value={num('radio_metrics_retention_days', 30)} onChange={v => set('radio_metrics_retention_days', v)} min={1} max={3650} />
+              <span className="text-sm text-white">days</span>
+            </div>
           </Field>
-          {bool('okta_saml_enabled') && (
-            <>
-              <Field label="Paste IdP Metadata XML" hint="Paste the full XML from your IdP's SAML app configuration. Fields below will auto-fill.">
-                <MetadataPasteBox onParsed={r => {
-                  if (r.entity_id) set('okta_saml_idp_entity_id', r.entity_id)
-                  if (r.sso_url) set('okta_saml_idp_sso_url', r.sso_url)
-                  if (r.cert) set('okta_saml_idp_cert', r.cert)
-                }} />
-              </Field>
-              <Field label="IdP Entity ID">
-                <TextInput value={str('okta_saml_idp_entity_id')} onChange={v => set('okta_saml_idp_entity_id', v)} placeholder="https://idp.example.com/..." mono />
-              </Field>
-              <Field label="IdP SSO URL">
-                <TextInput value={str('okta_saml_idp_sso_url')} onChange={v => set('okta_saml_idp_sso_url', v)} placeholder="https://idp.example.com/sso/saml" mono />
-              </Field>
-              <Field label="IdP X.509 Certificate" hint="PEM headers are stripped automatically">
-                <CertTextarea value={str('okta_saml_idp_cert')} onChange={v => set('okta_saml_idp_cert', v)} rows={4} secret />
-              </Field>
-              <Field label="SP Entity ID" hint="Leave blank to use the auto-generated metadata URL">
-                <TextInput value={str('okta_saml_sp_entity_id')} onChange={v => set('okta_saml_sp_entity_id', v)} placeholder={`${str('base_url')}/api/auth/saml/metadata`} mono />
-              </Field>
-              <Field label="ACS URL (read-only)" hint="Register this URL as the Single Sign-On URL in your IdP">
-                <div className="flex items-center gap-2">
-                  <input readOnly value={`${str('base_url')}/api/auth/saml/callback`}
-                    className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-400 font-mono cursor-default" />
-                  <a href={`${str('base_url')}/api/auth/saml/metadata`} target="_blank" rel="noreferrer"
-                    className="text-xs text-sky-400 hover:text-sky-300 whitespace-nowrap">View SP metadata ↗</a>
-                </div>
-              </Field>
-              <Field label="SP Certificate" hint="Optional: for signed authentication requests">
-                <CertTextarea value={str('okta_saml_sp_cert')} onChange={v => set('okta_saml_sp_cert', v)} rows={3} placeholder="Leave blank if not signing requests" secret />
-              </Field>
-              <Field label="SP Private Key" hint="Optional: private key for signing requests (kept secret)">
-                <CertTextarea value={str('okta_saml_sp_key')} onChange={v => set('okta_saml_sp_key', v)} rows={3} placeholder="Leave blank if not signing requests" secret />
-              </Field>
-            </>
-          )}
+          <Field label="Manual cleanup" hint="Immediately apply current retention settings">
+            <div className="flex items-center gap-3 flex-wrap">
+              <button onClick={runCleanup} disabled={cleanupRunning}
+                className="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white text-sm rounded-lg px-4 py-2 transition-colors">
+                {cleanupRunning ? 'Running…' : 'Run Cleanup Now'}
+              </button>
+              {cleanupResult && (
+                <span className={`text-xs ${cleanupResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                  {cleanupResult}
+                </span>
+              )}
+            </div>
+          </Field>
         </Section>
       )}
 
-      {tab === 'backup' && (
+      {dataTab === 'backups' && (
         <Section title="Backup" onSave={backupSave.save} saving={backupSave.saving} saved={backupSave.saved} error={backupSave.error}
           help={{
             title: 'Backup — How It Works',
@@ -742,28 +1586,138 @@ export default function Settings() {
           </Field>
         </Section>
       )}
-
-      {tab === 'integrations' && (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-white">Integrations</h2>
-            <HelpButton title="Integrations — How It Works">
-              <p><span className="text-gray-300 font-medium">Suite Token</span> is one-directional discovery: copy it into pktHub's App Manager when registering this app, so pktHub can proxy into it with users already signed in.</p>
-              <p><span className="text-gray-300 font-medium">Sibling pkt apps</span> below is the other direction: pktWiFi calling into pktsnmp/pktflow/pktlog/pktpcap to reuse data they've already collected. Paste each app's own suite token (from that app's Settings → Integrations) here.</p>
-            </HelpButton>
-          </div>
-          <div className="px-6 py-2">
-            <SuiteTokenDisplay />
-            <div className="pt-4 pb-1">
-              <p className="text-xs font-semibold text-white uppercase tracking-wider">Sibling pkt Apps</p>
-            </div>
-            <SiblingIntegrations />
           </div>
         </div>
       )}
 
-      {tab === 'users' && isAdmin && <UsersTab />}
+      {/* Notifications */}
+      {tab === 'notifications' && (
+        <Section title="Notifications" onSave={notifySave.save} saving={notifySave.saving} saved={notifySave.saved} error={notifySave.error}
+          help={{
+            title: 'Notifications — How It Works',
+            content: <>
+              <p>These five channels — Slack, Email, PagerDuty, generic Webhook, and TraceCat SOAR — are what an <span className="text-gray-300 font-medium">Alert rule</span> (Alerts page) can dispatch to when it fires. Enabling a channel here doesn't send anything by itself; it makes the channel available.</p>
+              <p><span className="text-gray-300 font-medium">Send Test</span> is a real dispatch, not a dry run — it posts to Slack, sends actual SMTP, fires a PagerDuty event, etc., using whatever's currently saved above.</p>
+              <p><span className="text-gray-300 font-medium">Webhook payload template</span> is Jinja2 — reference <code className="text-gray-400">alert_name</code>, <code className="text-gray-400">message</code>, <code className="text-gray-400">severity</code>, and <code className="text-gray-400">fired_at</code>.</p>
+            </>,
+          }}
+        >
+          {/* Slack */}
+          <div className="pt-2 pb-1">
+            <p className="text-xs font-semibold text-white uppercase tracking-wider">Slack</p>
+          </div>
+          <Field label="Enable Slack">
+            <Toggle value={bool('notify_slack_enabled')} onChange={v => set('notify_slack_enabled', v)} />
+          </Field>
+          {bool('notify_slack_enabled') && (
+            <>
+              <Field label="Webhook URL">
+                <TextInput value={str('notify_slack_webhook_url')} onChange={v => set('notify_slack_webhook_url', v)} placeholder="https://hooks.slack.com/services/…" secret mono />
+              </Field>
+              <Field label="Channel" hint="Override channel (optional)">
+                <TextInput value={str('notify_slack_channel', '#alerts')} onChange={v => set('notify_slack_channel', v)} placeholder="#alerts" />
+              </Field>
+              <SendTestButton channel="slack" />
+            </>
+          )}
 
+          {/* Email */}
+          <div className="pt-4 pb-1">
+            <p className="text-xs font-semibold text-white uppercase tracking-wider">Email (SMTP)</p>
+          </div>
+          <Field label="Enable email">
+            <Toggle value={bool('notify_email_enabled')} onChange={v => set('notify_email_enabled', v)} />
+          </Field>
+          {bool('notify_email_enabled') && (
+            <>
+              <Field label="SMTP host"><TextInput value={str('notify_email_smtp_host')} onChange={v => set('notify_email_smtp_host', v)} placeholder="smtp.yourorg.com" mono /></Field>
+              <Field label="SMTP port"><NumberInput value={num('notify_email_smtp_port', 587)} onChange={v => set('notify_email_smtp_port', v)} min={1} max={65535} /></Field>
+              <Field label="Use TLS"><Toggle value={bool('notify_email_smtp_tls', true)} onChange={v => set('notify_email_smtp_tls', v)} /></Field>
+              <Field label="Username"><TextInput value={str('notify_email_username')} onChange={v => set('notify_email_username', v)} mono /></Field>
+              <Field label="Password"><TextInput value={str('notify_email_password')} onChange={v => set('notify_email_password', v)} secret /></Field>
+              <Field label="From address"><TextInput value={str('notify_email_from')} onChange={v => set('notify_email_from', v)} placeholder="pktwifi@yourorg.com" /></Field>
+              <Field label="Default to" hint="Comma-separated email addresses">
+                <TextInput
+                  value={Array.isArray(settings['notify_email_default_to']) ? (settings['notify_email_default_to'] as string[]).join(', ') : ''}
+                  onChange={v => set('notify_email_default_to', v.split(',').map(s => s.trim()).filter(Boolean))}
+                  placeholder="noc@yourorg.com, security@yourorg.com"
+                />
+              </Field>
+              <SendTestButton channel="email" />
+            </>
+          )}
+
+          {/* PagerDuty */}
+          <div className="pt-4 pb-1">
+            <p className="text-xs font-semibold text-white uppercase tracking-wider">PagerDuty</p>
+          </div>
+          <Field label="Enable PagerDuty">
+            <Toggle value={bool('notify_pagerduty_enabled')} onChange={v => set('notify_pagerduty_enabled', v)} />
+          </Field>
+          {bool('notify_pagerduty_enabled') && (
+            <>
+              <Field label="Integration key" hint="Events API v2 integration key">
+                <TextInput value={str('notify_pagerduty_integration_key')} onChange={v => set('notify_pagerduty_integration_key', v)} secret mono />
+              </Field>
+              <SendTestButton channel="pagerduty" />
+            </>
+          )}
+
+          {/* Webhook */}
+          <div className="pt-4 pb-1">
+            <p className="text-xs font-semibold text-white uppercase tracking-wider">Webhook</p>
+          </div>
+          <Field label="Enable webhook">
+            <Toggle value={bool('notify_webhook_enabled')} onChange={v => set('notify_webhook_enabled', v)} />
+          </Field>
+          {bool('notify_webhook_enabled') && (
+            <>
+              <Field label="URL">
+                <TextInput value={str('notify_webhook_url')} onChange={v => set('notify_webhook_url', v)} placeholder="https://yourservice.com/pktwifi-alert" mono />
+              </Field>
+              <Field label="Method">
+                <SelectInput value={str('notify_webhook_method', 'POST')} onChange={v => set('notify_webhook_method', v)}
+                  options={[{ value: 'POST', label: 'POST' }, { value: 'PUT', label: 'PUT' }]} />
+              </Field>
+              <Field label="Payload template" hint="Jinja2 template; vars: alert_name, message, severity, fired_at">
+                <textarea value={str('notify_webhook_payload_template')} onChange={e => set('notify_webhook_payload_template', e.target.value)}
+                  rows={4} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:ring-2 focus:ring-sky-500" />
+              </Field>
+              <SendTestButton channel="webhook" />
+            </>
+          )}
+
+          {/* TraceCat */}
+          <div className="pt-2 pb-1">
+            <p className="text-sm font-medium text-white">TraceCat SOAR</p>
+          </div>
+          <Field label="Enable TraceCat">
+            <Toggle value={bool('notify_tracecat_enabled')} onChange={v => set('notify_tracecat_enabled', v)} />
+          </Field>
+          {bool('notify_tracecat_enabled') && (
+            <>
+              <Field label="Webhook URL" hint="Paste the workflow webhook URL from TraceCat → Workflow → Trigger">
+                <TextInput value={str('notify_tracecat_webhook_url')} onChange={v => set('notify_tracecat_webhook_url', v)} placeholder="https://tracecat.yourorg.com/api/v1/webhooks/…" mono />
+              </Field>
+              <Field label="API token" hint="Bearer token for TraceCat API authentication (optional if webhook is public)">
+                <TextInput value={str('notify_tracecat_api_token')} onChange={v => set('notify_tracecat_api_token', v)} secret />
+              </Field>
+              <SendTestButton channel="tracecat" />
+            </>
+          )}
+        </Section>
+      )}
+
+      {/* User Keys */}
+      {tab === 'apikeys' && (
+        <ApiKeysTab
+          lucidToken={str('lucid_api_token')}
+          onLucidChange={v => set('lucid_api_token', v)}
+          lucidSave={lucidSave}
+        />
+      )}
+
+      {/* System */}
       {tab === 'system' && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-800">
@@ -776,13 +1730,192 @@ export default function Settings() {
             <Field label="Install directory">
               <p className="text-sm text-white font-mono">{systemInfo?.install_dir ?? '—'}</p>
             </Field>
-            <Field label="Port">
-              <p className="text-sm text-white">{systemInfo?.port ?? '—'}</p>
-            </Field>
-            <RestartServiceRow />
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// -- SSL certificate upload ---------------------------------------------------
+
+function SslDropZone({ label, accept, file, onFile, dragging, onDrag }: {
+  label: string; accept: string; file: File | null
+  onFile: (f: File) => void; dragging: boolean; onDrag: (v: boolean) => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  return (
+    <div
+      className={`flex-1 border-2 border-dashed rounded-xl p-5 flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors select-none ${
+        dragging    ? 'border-sky-500 bg-sky-500/10'
+        : file      ? 'border-green-600 bg-green-600/10'
+        : 'border-gray-700 hover:border-gray-600'
+      }`}
+      onClick={() => inputRef.current?.click()}
+      onDragOver={e => { e.preventDefault(); onDrag(true) }}
+      onDragLeave={() => onDrag(false)}
+      onDrop={e => { e.preventDefault(); onDrag(false); const f = e.dataTransfer.files[0]; if (f) onFile(f) }}
+    >
+      <input ref={inputRef} type="file" accept={accept} className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) onFile(f) }} />
+      {file ? (
+        <>
+          <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <p className="text-xs font-medium text-green-400 text-center break-all">{file.name}</p>
+          <p className="text-xs text-white">{(file.size / 1024).toFixed(1)} KB</p>
+        </>
+      ) : (
+        <>
+          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="1.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12H9m1.5-12H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/>
+          </svg>
+          <p className="text-xs font-medium text-white text-center">{label}</p>
+          <p className="text-xs text-white">Drop or click to browse</p>
+        </>
+      )}
+    </div>
+  )
+}
+
+function SslPanel() {
+  const [status, setStatus]       = useState<SslStatus | null>(null)
+  const [mode, setMode]           = useState<'pem' | 'pfx'>('pfx')
+  const [certFile, setCertFile]   = useState<File | null>(null)
+  const [keyFile,  setKeyFile]    = useState<File | null>(null)
+  const [certDrag, setCertDrag]   = useState(false)
+  const [keyDrag,  setKeyDrag]    = useState(false)
+  const [pfxFile,  setPfxFile]    = useState<File | null>(null)
+  const [pfxDrag,  setPfxDrag]    = useState(false)
+  const [passphrase, setPassphrase] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const [removing,  setRemoving]  = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  useEffect(() => {
+    api.getSslStatus().then(setStatus).catch(() => setStatus({ installed: false }))
+  }, [])
+
+  const uploadPem = async () => {
+    if (!certFile || !keyFile) return
+    setUploading(true); setMsg(null)
+    try {
+      const s = await api.uploadSsl(certFile, keyFile)
+      setStatus(s); setCertFile(null); setKeyFile(null)
+      setMsg({ ok: true, text: 'Certificate installed. Restart the service (General tab) to enable HTTPS.' })
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message ?? 'Upload failed' })
+    } finally { setUploading(false) }
+  }
+
+  const uploadPfx = async () => {
+    if (!pfxFile || !passphrase) return
+    setUploading(true); setMsg(null)
+    try {
+      const s = await api.uploadSslPfx(pfxFile, passphrase)
+      setStatus(s); setPfxFile(null); setPassphrase('')
+      setMsg({ ok: true, text: 'Certificate installed from PFX. Restart the service (General tab) to enable HTTPS.' })
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message ?? 'Upload failed' })
+    } finally { setUploading(false) }
+  }
+
+  const remove = async () => {
+    setRemoving(true); setMsg(null)
+    try {
+      await api.deleteSsl()
+      setStatus({ installed: false })
+      setMsg({ ok: true, text: 'Certificate removed. Restart service to disable HTTPS.' })
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message ?? 'Remove failed' })
+    } finally { setRemoving(false) }
+  }
+
+  const daysLeft = status?.days_until_expiry ?? 9999
+  const expColor = daysLeft < 0 ? 'text-red-400' : daysLeft < 30 ? 'text-yellow-400' : 'text-green-400'
+  const expBadge = daysLeft < 0 ? 'Expired' : daysLeft < 30 ? `Expires in ${daysLeft}d` : `Valid · ${daysLeft}d left`
+  const pemReady = !!(certFile && keyFile)
+  const pfxReady = !!(pfxFile && passphrase)
+
+  return (
+    <div className="space-y-4">
+      {status?.installed ? (
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0"></span>
+              <span className="text-sm font-medium text-white">Certificate installed</span>
+            </div>
+            <span className={`text-xs font-medium ${expColor}`}>{expBadge}</span>
+          </div>
+          {status.subject && <p className="text-xs text-white font-mono">{status.subject}</p>}
+          {status.issuer  && <p className="text-xs text-white">Issued by: {status.issuer}</p>}
+          {status.expires && <p className="text-xs text-white">Expires: {status.expires}</p>}
+          {status.error   && <p className="text-xs text-red-400">Warning: {status.error}</p>}
+          <button onClick={remove} disabled={removing} className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 pt-1">
+            {removing ? 'Removing…' : '× Remove certificate'}
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 text-sm text-white">
+          <span className="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0"></span>
+          No certificate installed · running HTTP
+        </div>
+      )}
+
+      <div className="flex items-center gap-1 bg-gray-800 border border-gray-700 rounded-lg p-1 w-fit">
+        <button onClick={() => setMode('pfx')}
+          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${mode === 'pfx' ? 'bg-sky-600 text-white' : 'text-gray-400 hover:text-white'}`}>
+          PFX / P12
+        </button>
+        <button onClick={() => setMode('pem')}
+          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${mode === 'pem' ? 'bg-sky-600 text-white' : 'text-gray-400 hover:text-white'}`}>
+          PEM (cert + key)
+        </button>
+      </div>
+
+      {mode === 'pfx' ? (
+        <div className="space-y-3">
+          <SslDropZone label="PFX / P12 file (.pfx, .p12)" accept=".pfx,.p12"
+            file={pfxFile} onFile={setPfxFile} dragging={pfxDrag} onDrag={setPfxDrag} />
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Passphrase</label>
+            <input type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)}
+              placeholder="PFX passphrase"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={uploadPfx} disabled={!pfxReady || uploading}
+              className="px-4 py-2 text-sm bg-sky-600 hover:bg-sky-500 text-white rounded-lg disabled:opacity-40 transition-colors">
+              {uploading ? 'Uploading…' : 'Upload & Install'}
+            </button>
+            {!pfxReady && <span className="text-xs text-gray-500">{!pfxFile ? 'Drop a PFX file above' : 'Enter the passphrase'}</span>}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex gap-3">
+            <SslDropZone label="Certificate (.crt / .pem)" accept=".crt,.pem,.cer"
+              file={certFile} onFile={setCertFile} dragging={certDrag} onDrag={setCertDrag} />
+            <SslDropZone label="Private Key (.key / .pem)" accept=".key,.pem"
+              file={keyFile} onFile={setKeyFile} dragging={keyDrag} onDrag={setKeyDrag} />
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={uploadPem} disabled={!pemReady || uploading}
+              className="px-4 py-2 text-sm bg-sky-600 hover:bg-sky-500 text-white rounded-lg disabled:opacity-40 transition-colors">
+              {uploading ? 'Uploading…' : 'Upload & Install'}
+            </button>
+            {!pemReady && <span className="text-xs text-gray-500">Drop both cert and key files above</span>}
+          </div>
+        </div>
+      )}
+
+      {msg && <p className={`text-xs ${msg.ok ? 'text-green-400' : 'text-red-400'}`}>{msg.text}</p>}
+      <p className="text-xs text-gray-500 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 leading-relaxed">
+        After uploading, restart the service from the <strong className="text-white">General</strong> tab.
+        The service wrapper auto-detects cert files on startup — no additional config needed.
+      </p>
     </div>
   )
 }
