@@ -1,5 +1,9 @@
 # pktWiFi
 
+<p align="center">
+  <img src="lockup-256h.png" alt="pktWiFi" height="64">
+</p>
+
 Enterprise WiFi analyzer — part of the pkt suite. Aggregates access point,
 RF/channel, and client data from your own SNMP polling or vendor controller
 APIs, plus device/traffic/log context pulled from sibling pkt* apps
