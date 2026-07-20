@@ -10,6 +10,7 @@ const Clients       = lazy(() => import('./pages/Clients'))
 const Alerts        = lazy(() => import('./pages/Alerts'))
 const Logs          = lazy(() => import('./pages/Logs'))
 const Collectors    = lazy(() => import('./pages/Collectors'))
+const Sites         = lazy(() => import('./pages/Sites'))
 const Settings      = lazy(() => import('./pages/Settings'))
 
 function PageFallback() {
@@ -65,6 +66,11 @@ export default function App() {
           <Route path="/collectors" element={
             <AdminRoute>
               <Suspense fallback={<PageFallback />}><Collectors /></Suspense>
+            </AdminRoute>
+          } />
+          <Route path="/sites" element={
+            <AdminRoute>
+              <Suspense fallback={<PageFallback />}><Sites /></Suspense>
             </AdminRoute>
           } />
           <Route path="/integrations" element={<Navigate to="/settings" replace />} />

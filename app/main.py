@@ -29,6 +29,9 @@ from app.api import (
     collectors as collectors_router,
     integrations as integrations_router,
     suite as suite_router,
+    user_api_keys as user_api_keys_router,
+    ai as ai_router,
+    sites as sites_router,
 )
 
 settings = get_settings()
@@ -121,10 +124,13 @@ app.include_router(metrics_router.router,   prefix="/api/metrics",      tags=["m
 app.include_router(alerts_router.router,    prefix="/api/alerts",       tags=["alerts"])
 app.include_router(logs_router.router,      prefix="/api/logs",         tags=["logs"])
 app.include_router(collectors_router.router, prefix="/api/collectors", tags=["collectors"])
+app.include_router(sites_router.router,      prefix="/api/sites",        tags=["sites"])
 app.include_router(integrations_router.router, prefix="/api/integrations", tags=["integrations"])
 app.include_router(settings_router.router,  prefix="/api/settings",     tags=["settings"])
 app.include_router(system_router.router,    prefix="/api/system",       tags=["system"])
 app.include_router(suite_router.router,     prefix="/api/suite",        tags=["suite"])
+app.include_router(user_api_keys_router.router, prefix="/api/user-api-keys", tags=["user-api-keys"])
+app.include_router(ai_router.router,         prefix="/api/ai",           tags=["ai"])
 
 # -- Health check ------------------------------------------------------------------
 

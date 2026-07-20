@@ -98,6 +98,8 @@ async def list_events(
     active: bool | None = None,
     acked: bool | None = None,
     limit: int = 200,
+    since: str | None = None,
+    until: str | None = None,
     db: aiosqlite.Connection = Depends(get_db),
 ):
     query = "SELECT * FROM alert_events WHERE 1=1"
@@ -108,6 +110,15 @@ async def list_events(
     if acked is not None:
         query += " AND acked = ?"
         params.append(int(acked))
+    if since:
+        # created_at is stored via SQLite's datetime('now') (space-separated,
+        # no 'Z'/offset) — wrap the incoming ISO string in datetime() too so
+        # the comparison is format-normalized on both sides.
+        query += " AND created_at >= datetime(?)"
+        params.append(since)
+    if until:
+        query += " AND created_at <= datetime(?)"
+        params.append(until)
     query += " ORDER BY created_at DESC LIMIT ?"
     params.append(limit)
     async with db.execute(query, params) as cur:
@@ -120,6 +131,16 @@ async def ack_event(event_id: int, user: AnalystUser, db: aiosqlite.Connection =
     await db.execute(
         "UPDATE alert_events SET acked = 1, acked_by = ?, acked_at = datetime('now') WHERE id = ?",
         (user["username"], event_id),
+    )
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/events/ack-all")
+async def ack_all_events(user: AnalystUser, db: aiosqlite.Connection = Depends(get_db)):
+    await db.execute(
+        "UPDATE alert_events SET acked = 1, acked_by = ?, acked_at = datetime('now') WHERE acked = 0",
+        (user["username"],),
     )
     await db.commit()
     return {"status": "ok"}
