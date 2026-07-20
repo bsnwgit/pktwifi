@@ -81,17 +81,26 @@ export const api = {
     }
     return res.json() as Promise<{ access_token: string; role: string }>
   },
+  // Deliberately bypasses request() for the same reason as login() above.
+  autoLogin: async () => {
+    const res = await fetch('/api/auth/auto-login', { method: 'POST' })
+    if (!res.ok) throw new Error('Auto-login not available')
+    return res.json() as Promise<{ access_token: string; role: string }>
+  },
   logout: () => request('/auth/logout', { method: 'POST' }),
   getAuthConfig: () => request<{ saml_enabled: boolean; local_enabled: boolean }>('/auth/config'),
 
   // -- Users ---------------------------------------------------------------------
   getMe: () => request<User>('/users/me'),
   getUsers: () => request<User[]>('/users'),
-  createUser: (body: { username: string; email: string; password: string; role: string }) =>
+  createUser: (body: UserIn) =>
     request<User>('/users', { method: 'POST', body: JSON.stringify(body) }),
-  updateUser: (id: number, body: { role?: string; is_active?: boolean }) =>
+  updateUser: (id: number, body: Partial<UserIn> & { is_active?: boolean }) =>
     request<User>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteUser: (id: number) => request(`/users/${id}`, { method: 'DELETE' }),
+  setDefaultAdmin: (id: number) => request(`/users/${id}/set-default-admin`, { method: 'PATCH' }),
+  resetUserPassword: (id: number, newPassword: string) =>
+    request(`/users/${id}/reset-password`, { method: 'PATCH', body: JSON.stringify({ new_password: newPassword }) }),
   changeMyPassword: (current_password: string, new_password: string) =>
     request('/users/me/change-password', { method: 'POST', body: JSON.stringify({ current_password, new_password }) }),
 
@@ -126,21 +135,25 @@ export const api = {
   createAlertRule: (body: Partial<AlertRule>) => request<AlertRule>('/alerts/rules', { method: 'POST', body: JSON.stringify(body) }),
   updateAlertRule: (id: number, body: Partial<AlertRule>) => request<AlertRule>(`/alerts/rules/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteAlertRule: (id: number) => request(`/alerts/rules/${id}`, { method: 'DELETE' }),
-  getAlertEvents: (params?: { active?: boolean; acked?: boolean; limit?: number }) => {
+  getAlertEvents: (params?: { active?: boolean; acked?: boolean; limit?: number; since?: string; until?: string }) => {
     const q = new URLSearchParams()
     if (params?.active !== undefined) q.set('active', String(params.active))
     if (params?.acked !== undefined) q.set('acked', String(params.acked))
     if (params?.limit !== undefined) q.set('limit', String(params.limit))
+    if (params?.since) q.set('since', params.since)
+    if (params?.until) q.set('until', params.until)
     return request<AlertEvent[]>(`/alerts/events?${q}`)
   },
   ackAlertEvent: (id: number) => request(`/alerts/events/${id}/ack`, { method: 'POST' }),
+  ackAllAlertEvents: () => request(`/alerts/events/ack-all`, { method: 'POST' }),
   resolveAlertEvent: (id: number) => request(`/alerts/events/${id}/resolve`, { method: 'POST' }),
 
   // -- Logs ---------------------------------------------------------------------
-  getAppLogs: (params?: { level?: string; limit?: number }) => {
-    const q = new URLSearchParams(params as any)
-    return request<AppLog[]>(`/logs${q.toString() ? '?' + q : ''}`)
-  },
+  getLogs: (params: LogQueryParams) =>
+    request<LogResponse>(`/logs?${new URLSearchParams(params as Record<string, string>)}`),
+  getLogStats: () => request<LogStats>('/logs/stats'),
+  clearLogs: () => request('/logs', { method: 'DELETE' }),
+  setLogLevel: (level: string) => request(`/logs/level?level=${level}`, { method: 'POST' }),
   getPktLogEntries: (mac_address?: string) =>
     request<any[]>(`/logs/pktlog${mac_address ? `?mac_address=${mac_address}` : ''}`),
 
@@ -155,11 +168,20 @@ export const api = {
   deleteCollector: (id: number) => request(`/collectors/${id}`, { method: 'DELETE' }),
   pollCollectorNow: (id: number) => request<{ status: string; access_points: number; clients: number }>(`/collectors/${id}/poll-now`, { method: 'POST' }),
 
+  // -- Sites ---------------------------------------------------------------------
+  getSites: () => request<Site[]>('/sites'),
+  createSite: (body: { name: string; description?: string | null }) => request<Site>('/sites', { method: 'POST', body: JSON.stringify(body) }),
+  updateSite: (id: number, body: { name: string; description?: string | null }) => request<Site>(`/sites/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteSite: (id: number) => request(`/sites/${id}`, { method: 'DELETE' }),
+
   // -- Integrations (suite-token client of sibling pkt apps) -----------------------
   getIntegrations: () => request<Integration[]>('/integrations'),
-  setIntegration: (appName: string, body: { base_url: string; suite_token: string; enabled: boolean }) =>
-    request<Integration>(`/integrations/${appName}`, { method: 'PUT', body: JSON.stringify(body) }),
-  testIntegration: (appName: string) => request<{ healthy: boolean; detail: string }>(`/integrations/${appName}/test`, { method: 'POST' }),
+  createIntegration: (body: IntegrationInput) =>
+    request<Integration>('/integrations', { method: 'POST', body: JSON.stringify(body) }),
+  updateIntegration: (id: number, body: Partial<IntegrationInput>) =>
+    request<Integration>(`/integrations/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteIntegration: (id: number) => request(`/integrations/${id}`, { method: 'DELETE' }),
+  testIntegration: (id: number) => request<{ healthy: boolean; detail: string }>(`/integrations/${id}/test`, { method: 'POST' }),
 
   // -- Suite (inbound — pktHub registering this app) --------------------------------
   getSuiteToken: () => request<{ suite_token: string; has_token: boolean }>('/suite/token'),
@@ -168,15 +190,92 @@ export const api = {
   // -- Settings ---------------------------------------------------------------------
   getSettings: () => request<Record<string, unknown>>('/settings'),
   updateSettings: (values: Record<string, unknown>) => request('/settings', { method: 'PUT', body: JSON.stringify({ values }) }),
+  testNotification: (channel: string) =>
+    request<{ status: string; detail?: string }>('/settings/test-notification', {
+      method: 'POST',
+      body: JSON.stringify({ channel }),
+    }),
 
   // -- System ---------------------------------------------------------------------
   getSystemInfo: () => request<{ version: string; install_dir: string; port: number }>('/system/info'),
   listBackups: () => request<Array<{ name: string; path: string; size_bytes: number; files: string[] }>>('/system/backups'),
   runBackupNow: () => request<{ status: string; path: string; files: string[]; kept: number }>('/system/backups/run', { method: 'POST' }),
+  runCleanup: () =>
+    request<{ alerts_deleted: number; metrics_deleted: number; alert_retention_days: number; metrics_retention_days: number }>(
+      '/system/cleanup', { method: 'POST' }
+    ),
   restartService: () => request<{ status: string; message: string }>('/system/restart', { method: 'POST' }),
+  getPort: () => request<{ port: number }>('/system/port'),
+  setPort: (port: number) =>
+    request<{ port: number; message: string }>('/system/port', {
+      method: 'POST',
+      body: JSON.stringify({ port }),
+    }),
+
+  // ── SSL ───────────────────────────────────────────────────────────────────
+  getSslStatus: () => request<SslStatus>('/system/ssl/status'),
+  uploadSsl: async (cert: File, key: File): Promise<SslStatus> => {
+    const formData = new FormData()
+    formData.append('cert', cert)
+    formData.append('key', key)
+    const headers: Record<string, string> = {}
+    if (_accessToken) headers['Authorization'] = `Bearer ${_accessToken}`
+    const res = await fetch('/api/system/ssl/upload', { method: 'POST', headers, body: formData })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(err.detail || res.statusText)
+    }
+    return res.json()
+  },
+  deleteSsl: () => request<SslStatus>('/system/ssl/cert', { method: 'DELETE' }),
+  uploadSslPfx: async (pfx: File, passphrase: string): Promise<SslStatus> => {
+    const formData = new FormData()
+    formData.append('pfx', pfx)
+    formData.append('passphrase', passphrase)
+    const headers: Record<string, string> = {}
+    if (_accessToken) headers['Authorization'] = `Bearer ${_accessToken}`
+    const res = await fetch('/api/system/ssl/upload-pfx', { method: 'POST', headers, body: formData })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(err.detail || res.statusText)
+    }
+    return res.json()
+  },
+
+  // ── User API Keys ────────────────────────────────────────────────────────
+  getUserApiKeys: () => request<UserApiKey[]>('/user-api-keys'),
+  setUserApiKey: (provider: string, api_key: string) =>
+    request<UserApiKey>(`/user-api-keys/${provider}`, { method: 'PUT', body: JSON.stringify({ api_key }) }),
+  testUserApiKey: (provider: string, api_key: string) =>
+    request<{ status: string; detail: string }>(`/user-api-keys/${provider}/test`, { method: 'POST', body: JSON.stringify({ api_key }) }),
+}
+
+export interface UserApiKey {
+  provider: string
+  label: string
+  api_key: string
+  updated_at: string | null
+}
+
+export interface SslStatus {
+  installed: boolean
+  expires?: string
+  expires_iso?: string
+  days_until_expiry?: number
+  subject?: string
+  issuer?: string
+  error?: string
+  status?: string
 }
 
 // -- Types -----------------------------------------------------------------------
+
+export interface UserIn {
+  username: string
+  email: string
+  password?: string
+  role: string
+}
 
 export interface User {
   id: number
@@ -184,6 +283,7 @@ export interface User {
   email: string
   role: string
   is_active: boolean
+  is_default_admin: boolean
   auth_provider: string
   created_at: string
   last_login: string | null
@@ -302,12 +402,71 @@ export interface AlertEvent {
   created_at: string
 }
 
-export interface AppLog {
+export interface LogRecord {
   id: number
+  ts: string
   level: string
+  level_no: number
   logger: string
   message: string
   exc_info: string | null
+}
+
+export interface LogResponse {
+  total: number
+  limit: number
+  offset: number
+  records: LogRecord[]
+}
+
+export interface LogStats {
+  total: number
+  by_level: Record<string, number>
+  loggers: string[]
+  latest_ts: string | null
+  capture_level?: string
+}
+
+export type LogQueryParams = {
+  level?: string
+  logger?: string
+  search?: string
+  since?: string
+  until?: string
+  limit?: string
+  offset?: string
+}
+
+export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'select' | 'multiselect' | 'string_list' | 'host_list' | 'site_select'
+
+export interface FieldOption {
+  value: string
+  label: string
+}
+
+export interface FieldShowIf {
+  key: string
+  equals: string
+}
+
+export interface FieldSchema {
+  key: string
+  label: string
+  type: FieldType
+  required?: boolean
+  placeholder?: string
+  help?: string
+  default?: unknown
+  options?: FieldOption[]        // select | multiselect
+  sub_fields?: FieldSchema[]     // host_list — columns per row
+  item_placeholder?: string      // string_list
+  show_if?: FieldShowIf          // only render when another field in the same form equals a value
+}
+
+export interface Site {
+  id: number
+  name: string
+  description: string | null
   created_at: string
 }
 
@@ -315,7 +474,7 @@ export interface CollectorType {
   type: string
   label: string
   implemented: boolean
-  fields: string[]
+  fields: FieldSchema[]
 }
 
 export interface Collector {
@@ -331,10 +490,20 @@ export interface Collector {
 }
 
 export interface Integration {
+  id: number
+  name: string
   app_name: string
   base_url: string
   has_token: boolean
   enabled: boolean
   health_status: string
   last_health_check: string | null
+}
+
+export interface IntegrationInput {
+  name: string
+  app_name?: string
+  base_url: string
+  suite_token: string
+  enabled?: boolean
 }

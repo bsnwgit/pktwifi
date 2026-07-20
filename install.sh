@@ -1,9 +1,10 @@
 #!/bin/bash
 # pktWiFi install script — Ubuntu Server 22.04/24.04 LTS
 # Usage: bash install.sh
-# Prompts for the install directory (default /opt/pktwifi) when run interactively.
-# Override defaults with env vars to skip the prompt, e.g.:
-#   PKTWIFI_INSTALL_DIR=/opt/pktwifi PKTWIFI_SERVICE_USER=pktwifi bash install.sh
+# Prompts for the install directory (default /opt/pktwifi) and port (default
+# 8769) when run interactively.
+# Override defaults with env vars to skip the prompts, e.g.:
+#   PKTWIFI_INSTALL_DIR=/opt/pktwifi PKTWIFI_SERVICE_USER=pktwifi PKTWIFI_PORT=8769 bash install.sh
 
 set -euo pipefail
 
@@ -12,6 +13,12 @@ if [ -z "${PKTWIFI_INSTALL_DIR:-}" ] && [ -t 0 ]; then
     INSTALL_DIR="${INSTALL_DIR_INPUT:-/opt/pktwifi}"
 else
     INSTALL_DIR="${PKTWIFI_INSTALL_DIR:-/opt/pktwifi}"
+fi
+if [ -z "${PKTWIFI_PORT:-}" ] && [ -t 0 ]; then
+    read -rp "Port [8769]: " PORT_INPUT
+    PORT="${PORT_INPUT:-8769}"
+else
+    PORT="${PKTWIFI_PORT:-8769}"
 fi
 LOG_DIR="${PKTWIFI_LOG_DIR:-$INSTALL_DIR/logs}"
 SERVICE_USER="${PKTWIFI_SERVICE_USER:-$(whoami)}"
@@ -24,6 +31,7 @@ LOCAL_IP="$(hostname -I | awk '{print $1}')"
 echo "=== pktWiFi Installer ==="
 echo "Install dir: $INSTALL_DIR"
 echo "Service user: $SERVICE_USER"
+echo "Port: $PORT"
 echo ""
 
 # -- 1. System packages --------------------------------------------------------
@@ -39,6 +47,7 @@ sudo apt-get install -y --no-install-recommends \
 echo "[2/8] Creating directories..."
 sudo mkdir -p "$INSTALL_DIR"
 sudo mkdir -p "$LOG_DIR"
+sudo mkdir -p "$INSTALL_DIR/ssl"
 # Owned by the invoking user for now so the steps below don't need sudo;
 # re-owned to $SERVICE_USER:$SERVICE_GROUP at the end (step 8).
 sudo chown "$(whoami):$(whoami)" "$INSTALL_DIR" "$LOG_DIR"
@@ -70,7 +79,8 @@ if [ ! -f "$INSTALL_DIR/config.yaml" ]; then
     # Generate a Fernet key for encrypting collector credentials at rest
     CRED_KEY=$("$VENV/bin/python3" -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
     sed -i "s#CHANGE_ME_generate_with_fernet_generate_key#$CRED_KEY#" "$INSTALL_DIR/config.yaml"
-    sed -i "s#http://SERVER-IP:8769#http://$LOCAL_IP:8769#g" "$INSTALL_DIR/config.yaml"
+    sed -i "s#http://SERVER-IP:8769#http://$LOCAL_IP:$PORT#g" "$INSTALL_DIR/config.yaml"
+    sed -i "s/^port: 8769/port: $PORT/" "$INSTALL_DIR/config.yaml"
     # Pin install_dir explicitly (app/config.py derives every other path —
     # db, logs, ssl, backups — from this by default).
     echo "install_dir: \"$INSTALL_DIR\"" >> "$INSTALL_DIR/config.yaml"
@@ -140,7 +150,7 @@ echo ""
 echo "+----------------------------------------------------------+"
 echo "|             pktWiFi installed successfully!               |"
 echo "+----------------------------------------------------------+"
-printf "|  URL:           http://%-35s|\n" "$LOCAL_IP:8769"
+printf "|  URL:           http://%-35s|\n" "$LOCAL_IP:$PORT"
 echo "|  Username:      admin                                    |"
 printf "|  Password:      %-43s|\n" "$ADMIN_PASS"
 echo "|                                                          |"
@@ -158,7 +168,7 @@ if [ "$FRONTEND_BUILT" -eq 0 ]; then
     echo ""
 fi
 echo "Next steps:"
-echo "  1. Open the firewall for TCP 8769"
+echo "  1. Open the firewall for TCP $PORT"
 echo "  2. Log in and change the admin password (top-left user menu)"
 echo "  3. Add a collector under Collectors, and/or connect sibling pkt apps under Integrations"
 echo "  4. Copy the pktHub Integration token (Integrations page) into pktHub's App Manager"

@@ -119,12 +119,16 @@ async def poll_now(collector_id: int, user: AdminUser, db: aiosqlite.Connection 
     try:
         result = await collector.poll()
     except Exception as exc:
+        # Some exceptions (e.g. httpx.ConnectTimeout) have an empty str() —
+        # always include the exception type name so the user never sees a
+        # blank error message.
+        detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
         await db.execute(
             "UPDATE collectors SET status = 'error', last_error = ?, last_poll_at = datetime('now') WHERE id = ?",
-            (str(exc), collector_id),
+            (detail, collector_id),
         )
         await db.commit()
-        raise HTTPException(status_code=502, detail=f"Poll failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Poll failed: {detail}")
 
     await db.execute(
         "UPDATE collectors SET status = 'ok', last_error = NULL, last_poll_at = datetime('now') WHERE id = ?",

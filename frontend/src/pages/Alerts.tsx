@@ -1,6 +1,158 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api, AlertEvent, AlertRule, AlertConditionType } from '../api/client'
-import clsx from 'clsx'
+import HelpButton from '../components/HelpButton'
+
+// ── Time range ────────────────────────────────────────────────────────────────
+
+const TIME_RANGES = [
+  { value: '1h',     label: '1h' },
+  { value: '6h',     label: '6h' },
+  { value: '24h',    label: '24h' },
+  { value: '7d',     label: '7d' },
+  { value: '30d',    label: '30d' },
+  { value: 'all',    label: 'All time' },
+  { value: 'custom', label: 'Custom range…' },
+] as const
+type TimeRange = typeof TIME_RANGES[number]['value']
+
+const TIME_RANGE_MS: Record<Exclude<TimeRange, 'all' | 'custom'>, number> = {
+  '1h':  60 * 60 * 1000,
+  '6h':  6 * 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d':  7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+}
+
+interface TimeWindow {
+  since?: string
+  until?: string
+}
+
+// datetime-local values are local wall-clock time with no timezone info, so
+// format from local (not UTC) date components — a plain toISOString() would
+// shift the displayed clock time by the browser's UTC offset.
+function toLocalInputValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+function todayStart(): string {
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  return toLocalInputValue(d)
+}
+function todayEnd(): string {
+  const d = new Date()
+  d.setHours(23, 59, 0, 0)
+  return toLocalInputValue(d)
+}
+/** Never allow a future moment — clamp back to right now instead. */
+function clampFuture(value: string): string {
+  if (!value) return value
+  const now = new Date()
+  return new Date(value).getTime() > now.getTime() ? toLocalInputValue(now) : value
+}
+
+/** Preset + custom date/time range picker. Reports the resolved {since, until} ISO bounds up to the parent. */
+function TimeRangeControl({ onChange }: { onChange: (window: TimeWindow) => void }) {
+  const [preset, setPreset]         = useState<TimeRange>('all')
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo]     = useState('')
+  const [rangeError, setRangeError] = useState('')
+
+  const emit = (p: TimeRange, from: string, to: string) => {
+    if (p === 'custom') {
+      onChange({
+        since: from ? new Date(from).toISOString() : undefined,
+        until: to ? new Date(to).toISOString() : undefined,
+      })
+    } else if (p === 'all') {
+      onChange({})
+    } else {
+      onChange({ since: new Date(Date.now() - TIME_RANGE_MS[p]).toISOString() })
+    }
+  }
+
+  const applyCustom = (from: string, to: string) => {
+    if (from && to && new Date(to).getTime() < new Date(from).getTime()) {
+      setRangeError('End date/time must be after the start date/time.')
+      return
+    }
+    setRangeError('')
+    emit('custom', from, to)
+  }
+
+  const nowLocal = toLocalInputValue(new Date())
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <select
+        value={preset}
+        onChange={e => {
+          const p = e.target.value as TimeRange
+          setPreset(p)
+          setRangeError('')
+          if (p === 'custom') {
+            const from = customFrom || todayStart()
+            const to   = clampFuture(customTo || todayEnd())
+            setCustomFrom(from)
+            setCustomTo(to)
+            applyCustom(from, to)
+          } else {
+            emit(p, customFrom, customTo)
+          }
+        }}
+        className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
+      >
+        {TIME_RANGES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+      </select>
+      {preset === 'custom' && (
+        <>
+          <input
+            type="datetime-local"
+            value={customFrom}
+            max={nowLocal}
+            onChange={e => {
+              const v = clampFuture(e.target.value)
+              setCustomFrom(v)
+              applyCustom(v, customTo)
+            }}
+            className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
+          />
+          <span className="text-xs text-gray-500">to</span>
+          <input
+            type="datetime-local"
+            value={customTo}
+            max={nowLocal}
+            onChange={e => {
+              const v = clampFuture(e.target.value)
+              setCustomTo(v)
+              applyCustom(customFrom, v)
+            }}
+            className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-sky-500"
+          />
+          {rangeError && <span className="text-xs text-red-400">{rangeError}</span>}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtTime(ts: string): string {
+  // created_at is stored as naive UTC (SQLite's datetime('now'), no 'Z') —
+  // without forcing UTC interpretation here the browser parses it as local time.
+  const utc = ts.includes('T') || ts.endsWith('Z') ? ts : ts.replace(' ', 'T') + 'Z'
+  return new Date(utc).toLocaleString([], {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
+}
+
+const SEV_STYLES: Record<string, string> = {
+  critical: 'bg-red-500/20 text-red-400 border border-red-500/40',
+  warning:  'bg-yellow-500/20 text-yellow-400 border border-yellow-500/40',
+  info:     'bg-blue-500/20 text-blue-400 border border-blue-500/40',
+}
 
 const CONDITION_LABELS: Record<AlertConditionType, string> = {
   ap_down: 'Access point unreachable',
@@ -11,111 +163,435 @@ const CONDITION_LABELS: Record<AlertConditionType, string> = {
   rogue_ap: 'Rogue access point detected',
 }
 
-function SeverityBadge({ severity }: { severity: string }) {
+const PAGE_SIZE = 25
+
+function Pagination({ page, totalPages, onChange }: { page: number; totalPages: number; onChange: (p: number) => void }) {
+  if (totalPages <= 1) return null
+  const blockStart = Math.floor((page - 1) / 5) * 5 + 1
+  const blockEnd   = Math.min(blockStart + 4, totalPages)
+  const pages = Array.from({ length: blockEnd - blockStart + 1 }, (_, i) => blockStart + i)
+  const btn = (p: number) => [
+    'text-xs min-w-[1.75rem] px-2 py-1 rounded-lg border transition-colors',
+    p === page
+      ? 'bg-sky-600/30 border-sky-500 text-sky-200'
+      : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white',
+  ].join(' ')
   return (
-    <span className={clsx('text-xs px-2 py-0.5 rounded-full font-medium', {
-      'bg-red-500/20 text-red-300': severity === 'critical',
-      'bg-amber-500/20 text-amber-300': severity === 'warning',
-      'bg-gray-500/20 text-gray-300': severity === 'info',
-    })}>{severity}</span>
+    <div className="flex items-center gap-1.5">
+      <button onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1}
+        className="text-xs px-2.5 py-1 rounded-lg border border-gray-700 bg-gray-800 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+        ← Prev
+      </button>
+      {blockStart > 1 && (<><button onClick={() => onChange(1)} className={btn(1)}>1</button><span className="px-1 text-gray-500 text-xs">..</span></>)}
+      {pages.map(p => <button key={p} onClick={() => onChange(p)} className={btn(p)}>{p}</button>)}
+      {blockEnd < totalPages && (<><span className="px-1 text-gray-500 text-xs">..</span><button onClick={() => onChange(totalPages)} className={btn(totalPages)}>{totalPages}</button></>)}
+      <button onClick={() => onChange(Math.min(totalPages, page + 1))} disabled={page === totalPages}
+        className="text-xs px-2.5 py-1 rounded-lg border border-gray-700 bg-gray-800 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+        Next →
+      </button>
+    </div>
+  )
+}
+
+function EventCard({ event, onAck }: { event: AlertEvent; onAck: (id: number) => void }) {
+  const isAcked    = event.acked
+  const isResolved = event.resolved && !isAcked
+
+  return (
+    <div className={`bg-gray-900 border rounded-xl p-4 transition-opacity ${
+      isAcked ? 'opacity-40 border-gray-800' : isResolved ? 'opacity-70 border-gray-700' : 'border-gray-700'
+    }`}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3 min-w-0">
+          <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full font-medium capitalize ${SEV_STYLES[event.severity] ?? SEV_STYLES.info}`}>
+            {event.severity}
+          </span>
+          {event.auto_resolved && (
+            <span className="shrink-0 text-xs px-2 py-0.5 rounded-full font-medium bg-green-500/20 text-green-400 border border-green-500/40">
+              auto-resolved
+            </span>
+          )}
+          <div className="min-w-0">
+            <p className="text-sm text-white">{event.message}</p>
+            <div className="flex items-center gap-3 mt-0.5">
+              {event.access_point_id != null && <span className="text-xs text-gray-500">AP #{event.access_point_id}</span>}
+              {event.client_mac && <span className="text-xs text-gray-500 font-mono">{event.client_mac}</span>}
+              {event.value != null && event.threshold != null && (
+                <span className="text-xs text-gray-500">{event.value} (threshold {event.threshold})</span>
+              )}
+            </div>
+            {isResolved && event.resolved_at && (
+              <p className="text-xs text-green-500/70 mt-0.5">Resolved {fmtTime(event.resolved_at)}</p>
+            )}
+          </div>
+        </div>
+        <div className="shrink-0 flex items-center gap-2">
+          <span className="text-xs text-white">{fmtTime(event.created_at)}</span>
+          {!isAcked && (
+            <button onClick={() => onAck(event.id)}
+              className="text-xs bg-gray-800 hover:bg-gray-700 text-white border border-gray-700 rounded px-2.5 py-1 transition-colors">
+              Ack
+            </button>
+          )}
+          {isAcked && <span className="text-xs text-green-500">✓ Acked</span>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+type Tab = 'active' | 'history' | 'rules'
+
+function RuleModal({ rule, onClose, onSaved }: { rule?: AlertRule | null; onClose: () => void; onSaved: () => void }) {
+  const editing = !!rule
+  const [form, setForm] = useState({
+    name: rule?.name ?? '',
+    condition_type: rule?.condition_type ?? ('ap_down' as AlertConditionType),
+    threshold: rule?.threshold != null ? String(rule.threshold) : '',
+    severity: rule?.severity ?? 'warning',
+    enabled: rule?.enabled ?? true,
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    setError('')
+    try {
+      const body = {
+        name: form.name,
+        condition_type: form.condition_type,
+        threshold: form.threshold ? parseFloat(form.threshold) : null,
+        severity: form.severity,
+        enabled: form.enabled,
+      }
+      if (editing) await api.updateAlertRule(rule!.id, body)
+      else await api.createAlertRule(body)
+      onSaved()
+    } catch (err: any) {
+      setError(err.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-white mb-5">{editing ? `Edit — ${rule!.name}` : 'New Rule'}</h2>
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-xs text-white block mb-1">Name</label>
+            <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="text-xs text-white block mb-1">Condition</label>
+            <select value={form.condition_type} onChange={e => setForm(f => ({ ...f, condition_type: e.target.value as AlertConditionType }))}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500">
+              {(Object.keys(CONDITION_LABELS) as AlertConditionType[]).map(c => <option key={c} value={c}>{CONDITION_LABELS[c]}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-white block mb-1">Threshold (optional)</label>
+            <input type="number" value={form.threshold} onChange={e => setForm(f => ({ ...f, threshold: e.target.value }))}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500" />
+          </div>
+          <div>
+            <label className="text-xs text-white block mb-1">Severity</label>
+            <select value={form.severity} onChange={e => setForm(f => ({ ...f, severity: e.target.value as 'critical' | 'warning' | 'info' }))}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500">
+              <option value="critical">Critical</option>
+              <option value="warning">Warning</option>
+              <option value="info">Info</option>
+            </select>
+          </div>
+          {error && <p className="text-red-400 text-xs">{error}</p>}
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-white hover:text-white transition-colors">Cancel</button>
+            <button type="submit" disabled={saving}
+              className="px-4 py-2 text-sm bg-sky-600 hover:bg-sky-500 text-white rounded-lg transition-colors disabled:opacity-50">
+              {saving ? 'Saving…' : (editing ? 'Save Changes' : 'Create Rule')}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   )
 }
 
 export default function Alerts() {
-  const [events, setEvents] = useState<AlertEvent[]>([])
-  const [rules, setRules] = useState<AlertRule[]>([])
-  const [tab, setTab] = useState<'events' | 'rules'>('events')
+  const [tab, setTab]         = useState<Tab>('active')
+  const [events, setEvents]   = useState<AlertEvent[]>([])
+  const [history, setHistory] = useState<AlertEvent[]>([])
+  const [rules, setRules]     = useState<AlertRule[]>([])
   const [loading, setLoading] = useState(true)
+  const [editRule, setEditRule]     = useState<AlertRule | null>(null)
+  const [addingRule, setAddingRule] = useState(false)
 
-  const load = () => Promise.all([api.getAlertEvents({ limit: 200 }), api.getAlertRules()])
-    .then(([e, r]) => { setEvents(e); setRules(r) })
-    .catch(() => {})
-    .finally(() => setLoading(false))
+  const [eventsFilter, setEventsFilter]         = useState('')
+  const [eventsSevFilter, setEventsSevFilter]   = useState('')
+  const [eventsWindow, setEventsWindow]         = useState<TimeWindow>({})
+  const [historyFilter, setHistoryFilter]       = useState('')
+  const [historySevFilter, setHistorySevFilter] = useState('')
+  const [historyWindow, setHistoryWindow]       = useState<TimeWindow>({})
+  const [eventsPage, setEventsPage]             = useState(1)
+  const [historyPage, setHistoryPage]           = useState(1)
+  const [rulesFilter, setRulesFilter]           = useState('')
 
-  useEffect(() => { load() }, [])
+  const loadEvents = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [active, acked] = await Promise.all([
+        api.getAlertEvents({ acked: false, limit: 200, since: eventsWindow.since, until: eventsWindow.until }),
+        api.getAlertEvents({ acked: true, limit: 200, since: historyWindow.since, until: historyWindow.until }),
+      ])
+      setEvents(active)
+      setHistory(acked)
+    } finally {
+      setLoading(false)
+    }
+  }, [eventsWindow, historyWindow])
 
-  const ack = async (id: number) => { await api.ackAlertEvent(id); load() }
-  const resolve = async (id: number) => { await api.resolveAlertEvent(id); load() }
-  const toggleRule = async (rule: AlertRule) => { await api.updateAlertRule(rule.id, { ...rule, enabled: !rule.enabled }); load() }
+  const loadRules = useCallback(async () => {
+    try { setRules(await api.getAlertRules()) } catch {}
+  }, [])
 
-  if (loading) return <div className="text-white">Loading…</div>
+  useEffect(() => { loadEvents() }, [loadEvents])
+  useEffect(() => { loadRules() }, [loadRules])
+
+  const handleAck = async (id: number) => { await api.ackAlertEvent(id); await loadEvents() }
+  const handleAckAll = async () => { await api.ackAllAlertEvents(); await loadEvents() }
+  const handleToggle = async (rule: AlertRule) => {
+    setRules(rs => rs.map(r => r.id === rule.id ? { ...r, enabled: !r.enabled } : r))
+    try {
+      await api.updateAlertRule(rule.id, { ...rule, enabled: !rule.enabled })
+    } catch {
+      setRules(rs => rs.map(r => r.id === rule.id ? { ...r, enabled: rule.enabled } : r))
+    }
+  }
+  const handleDeleteRule = async (id: number) => {
+    if (!confirm('Delete this alert rule?')) return
+    await api.deleteAlertRule(id)
+    await loadRules()
+  }
+
+  const filteredEvents = useMemo(() => events.filter(e =>
+    (!eventsSevFilter || e.severity === eventsSevFilter) &&
+    (!eventsFilter || e.message.toLowerCase().includes(eventsFilter.toLowerCase()))
+  ), [events, eventsSevFilter, eventsFilter])
+  const eventsTotalPages = Math.max(1, Math.ceil(filteredEvents.length / PAGE_SIZE))
+  const eventsPageClamped = Math.min(eventsPage, eventsTotalPages)
+  const pagedEvents = filteredEvents.slice((eventsPageClamped - 1) * PAGE_SIZE, eventsPageClamped * PAGE_SIZE)
+
+  const filteredHistory = useMemo(() => history.filter(e =>
+    (!historySevFilter || e.severity === historySevFilter) &&
+    (!historyFilter || e.message.toLowerCase().includes(historyFilter.toLowerCase()))
+  ), [history, historySevFilter, historyFilter])
+  const historyTotalPages = Math.max(1, Math.ceil(filteredHistory.length / PAGE_SIZE))
+  const historyPageClamped = Math.min(historyPage, historyTotalPages)
+  const pagedHistory = filteredHistory.slice((historyPageClamped - 1) * PAGE_SIZE, historyPageClamped * PAGE_SIZE)
+
+  const displayedRules = useMemo(() => rules.filter(r => {
+    if (!rulesFilter) return true
+    const q = rulesFilter.toLowerCase()
+    return r.name.toLowerCase().includes(q) || r.condition_type.toLowerCase().includes(q) || r.severity.toLowerCase().includes(q)
+  }), [rules, rulesFilter])
+
+  const unackedCount = events.filter(e => !e.acked).length
+
+  if (loading && events.length === 0 && history.length === 0) return <div className="text-white text-sm">Loading…</div>
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-4">
-        <h1 className="text-xl font-semibold text-white">Alerts</h1>
-        <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1">
-          <button onClick={() => setTab('events')} className={clsx('px-3 py-1 text-sm rounded-md', tab === 'events' ? 'bg-sky-600 text-white' : 'text-gray-400')}>Events</button>
-          <button onClick={() => setTab('rules')} className={clsx('px-3 py-1 text-sm rounded-md', tab === 'rules' ? 'bg-sky-600 text-white' : 'text-gray-400')}>Rules</button>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold text-white">Alerts</h1>
+            <HelpButton title="Alerts — How It Works">
+              <p>Six fixed condition types: <span className="text-gray-300 font-medium">access point unreachable</span>, <span className="text-gray-300 font-medium">high channel utilization</span>, <span className="text-gray-300 font-medium">low client SNR</span>, <span className="text-gray-300 font-medium">high retry rate</span>, <span className="text-gray-300 font-medium">high client count</span>, and <span className="text-gray-300 font-medium">rogue AP detected</span>.</p>
+              <p>Auto-resolve means an open alert closes itself the next time its rule evaluates and the condition no longer holds — no need to manually clear it.</p>
+            </HelpButton>
+          </div>
+          <p className="text-sm text-white mt-0.5">
+            {unackedCount > 0 ? `${unackedCount} active alert${unackedCount !== 1 ? 's' : ''}` : 'No active alerts'}
+          </p>
         </div>
+        {tab === 'active' && events.length > 0 && (
+          <button onClick={handleAckAll} className="text-sm border border-gray-700 hover:border-gray-500 text-white rounded-lg px-4 py-2 transition-colors">
+            Ack all
+          </button>
+        )}
+        {tab === 'rules' && (
+          <button onClick={() => setAddingRule(true)} className="bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors">
+            + New rule
+          </button>
+        )}
       </div>
 
-      {tab === 'events' ? (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-800/50 text-gray-400 text-left">
-              <tr>
-                <th className="px-4 py-2 font-medium">Severity</th>
-                <th className="px-4 py-2 font-medium">Message</th>
-                <th className="px-4 py-2 font-medium">Created</th>
-                <th className="px-4 py-2 font-medium">Status</th>
-                <th className="px-4 py-2 font-medium"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map(e => (
-                <tr key={e.id} className="border-t border-gray-800">
-                  <td className="px-4 py-2"><SeverityBadge severity={e.severity} /></td>
-                  <td className="px-4 py-2 text-white">{e.message}</td>
-                  <td className="px-4 py-2 text-gray-500">{e.created_at}</td>
-                  <td className="px-4 py-2 text-gray-400">
-                    {e.resolved ? 'resolved' : e.acked ? 'acknowledged' : 'active'}
-                  </td>
-                  <td className="px-4 py-2 text-right space-x-2">
-                    {!e.acked && !e.resolved && <button onClick={() => ack(e.id)} className="text-xs text-sky-400 hover:text-sky-300">Ack</button>}
-                    {!e.resolved && <button onClick={() => resolve(e.id)} className="text-xs text-gray-400 hover:text-white">Resolve</button>}
-                  </td>
-                </tr>
-              ))}
-              {events.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">No alert events.</td></tr>
-              )}
-            </tbody>
-          </table>
+      {/* Tabs */}
+      <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1 w-fit">
+        {(['active', 'history', 'rules'] as Tab[]).map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            className={`text-sm px-4 py-1.5 rounded-lg transition-colors capitalize ${tab === t ? 'bg-gray-700 text-white' : 'text-white hover:text-white'}`}>
+            {t}
+            {t === 'active' && unackedCount > 0 && (
+              <span className="ml-1.5 bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5">{unackedCount}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Active events */}
+      {tab === 'active' && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              value={eventsFilter}
+              onChange={e => { setEventsFilter(e.target.value); setEventsPage(1) }}
+              placeholder="Filter by message…"
+              className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-gray-600 w-56 focus:outline-none focus:ring-1 focus:ring-sky-500"
+            />
+            {eventsFilter && <button onClick={() => { setEventsFilter(''); setEventsPage(1) }} className="text-xs text-white hover:text-white">✕</button>}
+            <select value={eventsSevFilter} onChange={e => { setEventsSevFilter(e.target.value); setEventsPage(1) }}
+              className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-sky-500">
+              <option value="">All severities</option>
+              <option value="critical">Critical</option>
+              <option value="warning">Warning</option>
+              <option value="info">Info</option>
+            </select>
+            {eventsSevFilter && <button onClick={() => { setEventsSevFilter(''); setEventsPage(1) }} className="text-xs text-white hover:text-white">✕</button>}
+            <TimeRangeControl onChange={w => { setEventsWindow(w); setEventsPage(1) }} />
+            {(eventsFilter || eventsSevFilter) && (
+              <span className="text-xs text-white ml-auto">{filteredEvents.length} result{filteredEvents.length !== 1 ? 's' : ''}</span>
+            )}
+          </div>
+          {loading && <p className="text-sm text-white">Loading…</p>}
+          {!loading && events.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-32 text-white">
+              <p className="text-2xl mb-2">✓</p>
+              <p className="text-sm">No unacknowledged alerts</p>
+            </div>
+          )}
+          {!loading && events.length > 0 && filteredEvents.length === 0 && (
+            <p className="text-sm text-white text-center py-8">No alerts match this filter</p>
+          )}
+          {filteredEvents.length > 0 && <Pagination page={eventsPageClamped} totalPages={eventsTotalPages} onChange={setEventsPage} />}
+          {pagedEvents.map(e => <EventCard key={e.id} event={e} onAck={handleAck} />)}
+          {filteredEvents.length > 0 && (
+            <div className="flex items-center justify-between text-xs text-gray-500 pt-1">
+              <span>Showing {((eventsPageClamped - 1) * PAGE_SIZE + 1).toLocaleString()}–{((eventsPageClamped - 1) * PAGE_SIZE + pagedEvents.length).toLocaleString()} of {filteredEvents.length.toLocaleString()} alerts</span>
+              <Pagination page={eventsPageClamped} totalPages={eventsTotalPages} onChange={setEventsPage} />
+            </div>
+          )}
         </div>
-      ) : (
+      )}
+
+      {/* History */}
+      {tab === 'history' && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              value={historyFilter}
+              onChange={e => { setHistoryFilter(e.target.value); setHistoryPage(1) }}
+              placeholder="Filter by message…"
+              className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-gray-600 w-56 focus:outline-none focus:ring-1 focus:ring-sky-500"
+            />
+            {historyFilter && <button onClick={() => { setHistoryFilter(''); setHistoryPage(1) }} className="text-xs text-white hover:text-white">✕</button>}
+            <select value={historySevFilter} onChange={e => { setHistorySevFilter(e.target.value); setHistoryPage(1) }}
+              className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:ring-1 focus:ring-sky-500">
+              <option value="">All severities</option>
+              <option value="critical">Critical</option>
+              <option value="warning">Warning</option>
+              <option value="info">Info</option>
+            </select>
+            {historySevFilter && <button onClick={() => { setHistorySevFilter(''); setHistoryPage(1) }} className="text-xs text-white hover:text-white">✕</button>}
+            <TimeRangeControl onChange={w => { setHistoryWindow(w); setHistoryPage(1) }} />
+            {(historyFilter || historySevFilter) && (
+              <span className="text-xs text-white ml-auto">{filteredHistory.length} result{filteredHistory.length !== 1 ? 's' : ''}</span>
+            )}
+          </div>
+          {history.length === 0 && !loading && (
+            <div className="flex flex-col items-center justify-center h-32 text-white"><p className="text-sm">No alert history</p></div>
+          )}
+          {history.length > 0 && filteredHistory.length === 0 && (
+            <p className="text-sm text-white text-center py-8">No alerts match this filter</p>
+          )}
+          {filteredHistory.length > 0 && <Pagination page={historyPageClamped} totalPages={historyTotalPages} onChange={setHistoryPage} />}
+          {pagedHistory.map(e => <EventCard key={e.id} event={e} onAck={handleAck} />)}
+          {filteredHistory.length > 0 && (
+            <div className="flex items-center justify-between text-xs text-gray-500 pt-1">
+              <span>Showing {((historyPageClamped - 1) * PAGE_SIZE + 1).toLocaleString()}–{((historyPageClamped - 1) * PAGE_SIZE + pagedHistory.length).toLocaleString()} of {filteredHistory.length.toLocaleString()} alerts</span>
+              <Pagination page={historyPageClamped} totalPages={historyTotalPages} onChange={setHistoryPage} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Rules */}
+      {tab === 'rules' && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-gray-800 flex items-center gap-3 flex-wrap">
+            <input
+              value={rulesFilter}
+              onChange={e => setRulesFilter(e.target.value)}
+              placeholder="Filter by name, condition, severity…"
+              className="bg-gray-800 border border-gray-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-gray-600 w-56 focus:outline-none focus:ring-1 focus:ring-sky-500"
+            />
+            {rulesFilter && <button onClick={() => setRulesFilter('')} className="text-xs text-white hover:text-white">✕</button>}
+            <span className="text-xs text-white ml-auto">{displayedRules.length} rule{displayedRules.length !== 1 ? 's' : ''}</span>
+          </div>
           <table className="w-full text-sm">
-            <thead className="bg-gray-800/50 text-gray-400 text-left">
-              <tr>
-                <th className="px-4 py-2 font-medium">Name</th>
-                <th className="px-4 py-2 font-medium">Condition</th>
-                <th className="px-4 py-2 font-medium">Threshold</th>
-                <th className="px-4 py-2 font-medium">Severity</th>
-                <th className="px-4 py-2 font-medium">Enabled</th>
+            <thead>
+              <tr className="border-b border-gray-800">
+                <th className="px-4 py-3 text-left text-xs font-medium text-white">Enabled</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-white">Rule</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-white">Condition</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-white">Threshold</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-white">Severity</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-white"></th>
               </tr>
             </thead>
-            <tbody>
-              {rules.map(r => (
-                <tr key={r.id} className="border-t border-gray-800">
-                  <td className="px-4 py-2 text-white">{r.name}</td>
-                  <td className="px-4 py-2 text-gray-300">{CONDITION_LABELS[r.condition_type]}</td>
-                  <td className="px-4 py-2 text-gray-300">{r.threshold ?? '—'}</td>
-                  <td className="px-4 py-2"><SeverityBadge severity={r.severity} /></td>
-                  <td className="px-4 py-2">
-                    <button onClick={() => toggleRule(r)} className={clsx('text-xs px-2 py-1 rounded-md', r.enabled ? 'bg-green-500/20 text-green-300' : 'bg-gray-700 text-gray-400')}>
-                      {r.enabled ? 'On' : 'Off'}
+            <tbody className="divide-y divide-gray-800/50">
+              {displayedRules.map(rule => (
+                <tr key={rule.id} className="hover:bg-gray-800/30 transition-colors">
+                  <td className="px-4 py-3">
+                    <button onClick={() => handleToggle(rule)}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${rule.enabled ? 'bg-sky-600' : 'bg-gray-700'}`}>
+                      <span className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${rule.enabled ? 'translate-x-5' : 'translate-x-1'}`} />
                     </button>
                   </td>
+                  <td className="px-4 py-3"><p className="font-medium text-white">{rule.name}</p></td>
+                  <td className="px-4 py-3 text-white text-xs">
+                    <span className="bg-gray-800 px-2 py-0.5 rounded">{CONDITION_LABELS[rule.condition_type]}</span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-300">{rule.threshold ?? '—'}</td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${SEV_STYLES[rule.severity] ?? SEV_STYLES.info}`}>{rule.severity}</span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => setEditRule(rule)} className="text-xs text-white hover:text-sky-400 transition-colors">Edit</button>
+                      <button onClick={() => handleDeleteRule(rule.id)} className="text-xs text-white hover:text-red-400 transition-colors">Delete</button>
+                    </div>
+                  </td>
                 </tr>
               ))}
-              {rules.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-500">No alert rules configured.</td></tr>
+              {displayedRules.length === 0 && (
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-white">
+                  {rulesFilter ? 'No rules match this filter' : 'No alert rules yet — click "+ New rule" to add one'}
+                </td></tr>
               )}
             </tbody>
           </table>
         </div>
       )}
+
+      {addingRule && <RuleModal onClose={() => setAddingRule(false)} onSaved={() => { setAddingRule(false); loadRules() }} />}
+      {editRule && <RuleModal rule={editRule} onClose={() => setEditRule(null)} onSaved={() => { setEditRule(null); loadRules() }} />}
     </div>
   )
 }
