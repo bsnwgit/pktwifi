@@ -46,11 +46,23 @@ class SuiteClient:
             return resp.json()
 
     async def health_check(self) -> tuple[bool, str]:
+        """
+        Full round trip: reach the host on the configured port AND prove the
+        stored suite_token is actually accepted there. Hits /api/suite/whoami
+        (authenticated), not the public /api/health — a wrong or revoked
+        token must fail this test, not just an unreachable host.
+        """
         try:
-            data = await self.get("/api/health")
-            ok = data.get("status") == "ok"
-            return ok, "reachable" if ok else f"unexpected response: {data}"
+            data = await self.get("/api/suite/whoami")
+            ok = bool(data.get("authenticated"))
+            return ok, f"connected and authenticated as {data.get('role', 'unknown')}" if ok else f"unexpected response: {data}"
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (401, 403):
+                return False, "reachable, but suite token was rejected — check the token"
             return False, f"HTTP {exc.response.status_code}"
+        except httpx.ConnectError as exc:
+            return False, f"could not connect to host/port: {exc}"
+        except httpx.TimeoutException:
+            return False, "connection timed out"
         except Exception as exc:
             return False, str(exc)

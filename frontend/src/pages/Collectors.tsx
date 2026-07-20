@@ -1,142 +1,330 @@
 import { useEffect, useState } from 'react'
-import { api, Collector, CollectorType } from '../api/client'
-import clsx from 'clsx'
+import { api, Collector, CollectorType, FieldSchema, Site } from '../api/client'
+import CollectorConfigForm from '../components/CollectorConfigForm'
+
+function defaultConfigFor(fields: FieldSchema[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const f of fields) {
+    if (f.default !== undefined) out[f.key] = f.default
+    else if (f.type === 'string_list') out[f.key] = []
+    else if (f.type === 'host_list') out[f.key] = []
+    else if (f.type === 'multiselect') out[f.key] = []
+  }
+  return out
+}
+
+function CollectorModal({ collector, types, sites, onClose, onSaved }: {
+  collector?: (Collector & { config?: Record<string, unknown> }) | null
+  types: CollectorType[]
+  sites: Site[]
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const editing = !!collector
+  const [collectorType, setCollectorType] = useState(collector?.collector_type ?? '')
+  const [name, setName] = useState(collector?.name ?? '')
+  const [pollInterval, setPollInterval] = useState(collector?.poll_interval_sec ?? 60)
+  const [enabled, setEnabled] = useState(collector?.enabled ?? true)
+  const [config, setConfig] = useState<Record<string, unknown>>(collector?.config ?? {})
+  const [showJson, setShowJson] = useState(false)
+  const [jsonText, setJsonText] = useState('')
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const selectedType = types.find(t => t.type === collectorType)
+
+  useEffect(() => {
+    if (!editing && types.length && !collectorType) {
+      const first = types.find(t => t.implemented) ?? types[0]
+      setCollectorType(first.type)
+      setConfig(defaultConfigFor(first.fields))
+    }
+  }, [types])
+
+  const selectType = (type: string) => {
+    setCollectorType(type)
+    if (!editing) {
+      const meta = types.find(t => t.type === type)
+      setConfig(meta ? defaultConfigFor(meta.fields) : {})
+    }
+  }
+
+  const setField = (key: string, v: unknown) => setConfig(c => ({ ...c, [key]: v }))
+
+  const openJsonView = () => {
+    setJsonText(JSON.stringify(config, null, 2))
+    setShowJson(true)
+  }
+
+  const closeJsonView = () => {
+    try {
+      setConfig(JSON.parse(jsonText || '{}'))
+      setShowJson(false)
+      setError('')
+    } catch {
+      setError('Config JSON is invalid — fix it or discard changes to go back to the form')
+    }
+  }
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    let finalConfig = config
+    if (showJson) {
+      try {
+        finalConfig = JSON.parse(jsonText || '{}')
+      } catch {
+        setError('Config JSON is invalid')
+        return
+      }
+    }
+    setSaving(true)
+    try {
+      const body = { name, collector_type: collectorType, config: finalConfig, poll_interval_sec: pollInterval, enabled }
+      if (editing) await api.updateCollector(collector!.id, body)
+      else await api.createCollector(body)
+      onSaved()
+    } catch (e: any) {
+      setError(e.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const inp = 'w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500'
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 overflow-y-auto py-8" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
+        <h2 className="text-lg font-semibold text-white mb-5">{editing ? `Edit — ${collector!.name}` : 'New Collector'}</h2>
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-xs text-white block mb-1">Name</label>
+            <input value={name} onChange={e => setName(e.target.value)} required className={inp} />
+          </div>
+          <div>
+            <label className="text-xs text-white block mb-1">Type</label>
+            <select value={collectorType} onChange={e => selectType(e.target.value)} disabled={editing} className={inp}>
+              {types.map(t => (
+                <option key={t.type} value={t.type}>{t.label}{!t.implemented ? ' (not implemented)' : ''}</option>
+              ))}
+            </select>
+          </div>
+          {selectedType && !selectedType.implemented && (
+            <p className="text-xs text-amber-400">This collector type is a documented stub — creating it will fail on poll until it's implemented.</p>
+          )}
+
+          {selectedType && (
+            <div className="bg-gray-800/40 border border-gray-800 rounded-lg px-3">
+              <div className="flex items-center justify-between pt-2">
+                <p className="text-xs font-semibold text-white uppercase tracking-wider">Configuration</p>
+                <button type="button" onClick={showJson ? closeJsonView : openJsonView}
+                  className="text-xs text-sky-400 hover:text-sky-300">
+                  {showJson ? '← Back to form' : 'Edit as JSON'}
+                </button>
+              </div>
+              {showJson ? (
+                <div className="py-3">
+                  <textarea value={jsonText} onChange={e => setJsonText(e.target.value)} rows={10}
+                    className={inp + ' font-mono resize-y'} spellCheck={false} />
+                </div>
+              ) : (
+                <CollectorConfigForm fields={selectedType.fields} value={config} onChange={setField} sites={sites} />
+              )}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-white block mb-1">Poll interval (sec)</label>
+              <input type="number" min={15} value={pollInterval} onChange={e => setPollInterval(Number(e.target.value))} className={inp} />
+            </div>
+            <div className="flex items-end pb-2">
+              <label className="flex items-center gap-2 text-sm text-white">
+                <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} /> Enabled
+              </label>
+            </div>
+          </div>
+          {error && <p className="text-red-400 text-xs">{error}</p>}
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-white">Cancel</button>
+            <button type="submit" disabled={saving} className="px-4 py-2 text-sm bg-sky-600 hover:bg-sky-500 text-white rounded-lg disabled:opacity-50">
+              {saving ? 'Saving…' : (editing ? 'Save Changes' : 'Create Collector')}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function PollErrorModal({ message, onClose }: { message: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+
+  const copy = async () => {
+    try {
+      // navigator.clipboard requires a secure context (HTTPS or localhost) —
+      // aiserver is typically plain HTTP on the LAN, where it's undefined
+      // and this throws immediately. Fall back to the older
+      // execCommand('copy') path, which works over plain HTTP.
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(message)
+      } else {
+        const ta = document.createElement('textarea')
+        ta.value = message
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.focus()
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      }
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // both clipboard methods unavailable — user can still select the text manually
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 py-8 px-4" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-lg w-full" onClick={e => e.stopPropagation()}>
+        <h3 className="text-lg font-semibold text-white mb-3">Poll failed</h3>
+        <div className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 max-h-64 overflow-y-auto mb-4">
+          <p className="text-xs text-red-400 font-mono whitespace-pre-wrap break-all">{message}</p>
+        </div>
+        <div className="flex items-center justify-between">
+          <button onClick={copy} className="text-xs text-sky-400 hover:text-sky-300 transition-colors">
+            {copied ? '✓ Copied' : '⧉ Copy to clipboard'}
+          </button>
+          <button onClick={onClose} className="px-4 py-2 text-sm bg-sky-600 hover:bg-sky-500 text-white rounded-lg">Close</button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function Collectors() {
   const [collectors, setCollectors] = useState<Collector[]>([])
   const [types, setTypes] = useState<CollectorType[]>([])
+  const [sites, setSites] = useState<Site[]>([])
   const [loading, setLoading] = useState(true)
-  const [showNew, setShowNew] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newType, setNewType] = useState('snmp_generic')
-  const [configText, setConfigText] = useState('{}')
-  const [error, setError] = useState('')
-  const [busyId, setBusyId] = useState<number | null>(null)
+  const [modal, setModal] = useState<'create' | (Collector & { config?: Record<string, unknown> }) | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<Collector | null>(null)
+  const [polling, setPolling] = useState<number | null>(null)
+  const [pollResult, setPollResult] = useState<Record<number, string>>({})
+  const [pollErrors, setPollErrors] = useState<Record<number, string>>({})
+  const [errorModalFor, setErrorModalFor] = useState<number | null>(null)
 
-  const load = () => Promise.all([api.getCollectors(), api.getCollectorTypes()])
-    .then(([c, t]) => { setCollectors(c); setTypes(t); if (t.length) setNewType(t.find(x => x.implemented)?.type ?? t[0].type) })
-    .catch(() => {})
-    .finally(() => setLoading(false))
+  const load = () => {
+    setLoading(true)
+    Promise.all([api.getCollectors(), api.getCollectorTypes(), api.getSites()])
+      .then(([c, t, s]) => { setCollectors(c); setTypes(t); setSites(s) })
+      .finally(() => setLoading(false))
+  }
+  useEffect(load, [])
 
-  useEffect(() => { load() }, [])
+  const openEdit = async (c: Collector) => {
+    const full = await api.getCollector(c.id)
+    setModal(full)
+  }
 
-  const createCollector = async () => {
-    setError('')
+  const del = async (c: Collector) => { await api.deleteCollector(c.id); setConfirmDelete(null); load() }
+
+  const pollNow = async (c: Collector) => {
+    setPolling(c.id)
+    setPollResult(r => ({ ...r, [c.id]: '' }))
     try {
-      const config = JSON.parse(configText || '{}')
-      await api.createCollector({ name: newName, collector_type: newType, config, poll_interval_sec: 60, enabled: true })
-      setShowNew(false)
-      setNewName('')
-      setConfigText('{}')
-      load()
+      const res = await api.pollCollectorNow(c.id)
+      setPollResult(r => ({ ...r, [c.id]: `OK — ${res.access_points} AP(s), ${res.clients} client(s)` }))
     } catch (e: any) {
-      setError(e.message || 'Failed to create collector — check config is valid JSON')
+      const message = e.message ?? 'Poll failed'
+      setPollResult(r => ({ ...r, [c.id]: 'Failed — see error' }))
+      setPollErrors(r => ({ ...r, [c.id]: message }))
+      setErrorModalFor(c.id)
+    } finally {
+      setPolling(null)
+      load()
     }
   }
 
-  const pollNow = async (id: number) => {
-    setBusyId(id)
-    try { await api.pollCollectorNow(id) } catch {} finally { setBusyId(null); load() }
-  }
+  const typeLabel = (type: string) => types.find(t => t.type === type)?.label ?? type
 
-  const toggle = async (c: Collector) => { await api.updateCollector(c.id, { enabled: !c.enabled }); load() }
-  const remove = async (id: number) => { if (confirm('Delete this collector?')) { await api.deleteCollector(id); load() } }
-
-  if (loading) return <div className="text-white">Loading…</div>
+  if (loading) return <div className="flex items-center justify-center h-48 text-white">Loading…</div>
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-white">Collectors</h1>
-        <button onClick={() => setShowNew(true)} className="text-sm bg-sky-600 hover:bg-sky-500 text-white rounded-lg px-3 py-1.5">
-          Add Collector
+        <h1 className="text-xl font-bold text-white">Collectors</h1>
+        <button onClick={() => setModal('create')} className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white text-sm rounded-lg">
+          <span className="text-base leading-none">+</span> Add Collector
         </button>
       </div>
 
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-gray-800/50 text-gray-400 text-left">
-            <tr>
-              <th className="px-4 py-2 font-medium">Name</th>
-              <th className="px-4 py-2 font-medium">Type</th>
-              <th className="px-4 py-2 font-medium">Status</th>
-              <th className="px-4 py-2 font-medium">Last Poll</th>
-              <th className="px-4 py-2 font-medium">Enabled</th>
-              <th className="px-4 py-2 font-medium"></th>
+          <thead>
+            <tr className="border-b border-gray-800">
+              <th className="text-left px-5 py-3 text-xs font-medium text-white uppercase tracking-wider">Name</th>
+              <th className="text-left px-5 py-3 text-xs font-medium text-white uppercase tracking-wider">Type</th>
+              <th className="text-left px-5 py-3 text-xs font-medium text-white uppercase tracking-wider">Status</th>
+              <th className="text-left px-5 py-3 text-xs font-medium text-white uppercase tracking-wider">Last Poll</th>
+              <th></th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-gray-800/60">
             {collectors.map(c => (
-              <tr key={c.id} className="border-t border-gray-800">
-                <td className="px-4 py-2 text-white">{c.name}</td>
-                <td className="px-4 py-2 text-gray-300">{types.find(t => t.type === c.collector_type)?.label ?? c.collector_type}</td>
-                <td className="px-4 py-2">
-                  <span className={clsx('text-xs', c.status === 'ok' ? 'text-green-400' : c.status === 'error' ? 'text-red-400' : 'text-gray-500')}>
-                    {c.status}{c.last_error ? ` — ${c.last_error}` : ''}
+              <tr key={c.id} className="hover:bg-gray-800/30">
+                <td className="px-5 py-3 text-white">{c.name}{!c.enabled && <span className="text-xs text-white ml-2">(disabled)</span>}</td>
+                <td className="px-5 py-3 text-white text-xs">{typeLabel(c.collector_type)}</td>
+                <td className="px-5 py-3">
+                  <span className={`text-xs font-medium ${c.status === 'ok' ? 'text-emerald-400' : c.status === 'error' ? 'text-red-400' : 'text-white'}`}>
+                    {c.status}
                   </span>
+                  {c.last_error && <p className="text-xs text-red-400 mt-0.5 max-w-xs truncate" title={c.last_error}>{c.last_error}</p>}
                 </td>
-                <td className="px-4 py-2 text-gray-500">{c.last_poll_at ?? 'never'}</td>
-                <td className="px-4 py-2">
-                  <button onClick={() => toggle(c)} className={clsx('text-xs px-2 py-1 rounded-md', c.enabled ? 'bg-green-500/20 text-green-300' : 'bg-gray-700 text-gray-400')}>
-                    {c.enabled ? 'On' : 'Off'}
+                <td className="px-5 py-3 text-white text-xs">{c.last_poll_at ?? 'never'}</td>
+                <td className="px-5 py-3 text-right space-x-2 whitespace-nowrap">
+                  {pollResult[c.id] && (
+                    pollErrors[c.id] ? (
+                      <button onClick={() => setErrorModalFor(c.id)} className="text-xs text-red-400 hover:text-red-300 mr-2 underline decoration-dotted">
+                        {pollResult[c.id]}
+                      </button>
+                    ) : (
+                      <span className="text-xs text-white mr-2">{pollResult[c.id]}</span>
+                    )
+                  )}
+                  <button onClick={() => pollNow(c)} disabled={polling === c.id} className="text-xs text-white hover:text-sky-400 disabled:opacity-50">
+                    {polling === c.id ? 'Polling…' : 'Poll Now'}
                   </button>
-                </td>
-                <td className="px-4 py-2 text-right space-x-3">
-                  <button onClick={() => pollNow(c.id)} disabled={busyId === c.id} className="text-xs text-sky-400 hover:text-sky-300 disabled:opacity-50">
-                    {busyId === c.id ? 'Polling…' : 'Poll now'}
-                  </button>
-                  <button onClick={() => remove(c.id)} className="text-xs text-red-400 hover:text-red-300">Delete</button>
+                  <button onClick={() => openEdit(c)} className="text-xs text-white hover:text-sky-400">Edit</button>
+                  <button onClick={() => setConfirmDelete(c)} className="text-xs text-white hover:text-red-400">Delete</button>
                 </td>
               </tr>
             ))}
-            {collectors.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No collectors configured yet.</td></tr>
-            )}
+            {collectors.length === 0 && <tr><td colSpan={5} className="px-5 py-8 text-center text-white">No collectors configured yet.</td></tr>}
           </tbody>
         </table>
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-        <h2 className="text-sm font-medium text-white mb-2">Available collector types</h2>
-        <ul className="text-sm space-y-1">
-          {types.map(t => (
-            <li key={t.type} className="flex justify-between">
-              <span className="text-gray-300">{t.label}</span>
-              <span className={t.implemented ? 'text-green-400 text-xs' : 'text-gray-600 text-xs'}>
-                {t.implemented ? 'available' : 'not yet implemented'}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      {modal !== null && (
+        <CollectorModal collector={modal === 'create' ? null : modal} types={types} sites={sites}
+          onClose={() => setModal(null)} onSaved={() => { setModal(null); load() }} />
+      )}
 
-      {showNew && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowNew(false)}>
-          <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
-            <h2 className="text-lg font-semibold text-white mb-4">Add Collector</h2>
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs text-white block mb-1">Name</label>
-                <input value={newName} onChange={e => setNewName(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white" />
-              </div>
-              <div>
-                <label className="text-xs text-white block mb-1">Type</label>
-                <select value={newType} onChange={e => setNewType(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white">
-                  {types.map(t => <option key={t.type} value={t.type} disabled={!t.implemented}>{t.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-white block mb-1">Config (JSON) — fields: {types.find(t => t.type === newType)?.fields.join(', ')}</label>
-                <textarea value={configText} onChange={e => setConfigText(e.target.value)} rows={6}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs font-mono text-white" />
-              </div>
-              {error && <p className="text-red-400 text-xs">{error}</p>}
-            </div>
-            <div className="flex justify-end gap-3 pt-4">
-              <button onClick={() => setShowNew(false)} className="px-4 py-2 text-sm text-white">Cancel</button>
-              <button onClick={createCollector} className="px-4 py-2 text-sm bg-sky-600 hover:bg-sky-500 text-white rounded-lg">Create</button>
+      {errorModalFor !== null && pollErrors[errorModalFor] && (
+        <PollErrorModal message={pollErrors[errorModalFor]} onClose={() => setErrorModalFor(null)} />
+      )}
+
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 max-w-sm w-full">
+            <h3 className="text-white font-semibold mb-2">Delete collector?</h3>
+            <p className="text-white text-sm mb-5"><strong>{confirmDelete.name}</strong> will be removed along with its access points/clients.</p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setConfirmDelete(null)} className="px-4 py-2 text-sm text-white">Cancel</button>
+              <button onClick={() => del(confirmDelete)} className="px-4 py-2 text-sm bg-red-600 hover:bg-red-500 text-white rounded-lg">Delete</button>
             </div>
           </div>
         </div>
