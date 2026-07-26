@@ -34,6 +34,17 @@ export default function Metrics() {
   const [metrics, setMetrics] = useState<Record<string, MetricPoint[]> | null>(null)
   const [metricsLoading, setMetricsLoading] = useState(false)
   const [metricsError, setMetricsError] = useState('')
+  // The chart X-axis domain — captured once per successful fetch, not
+  // recomputed from the data itself. Deriving the domain from dataMin/
+  // dataMax instead of the actual selected window was the bug behind
+  // "even with less data the graph should show a compressed version with
+  // proper ratio": 45 minutes of real points would stretch to fill the
+  // whole chart width no matter whether the window was 1h or 7d, since the
+  // axis only ever spanned whatever data happened to exist. Anchoring the
+  // domain to [fetchedAt - windowMinutes, fetchedAt] makes a small amount
+  // of data render as a small, correctly-proportioned slice of the chart
+  // instead of being stretched to fill it.
+  const [chartRange, setChartRange] = useState<[number, number] | null>(null)
 
   // Guards against an in-flight request from a previous AP/window selection
   // resolving *after* a newer one and clobbering it with stale data — this
@@ -73,13 +84,15 @@ export default function Metrics() {
   }
 
   const loadMetrics = useCallback(() => {
-    if (selectedId == null) { setMetrics(null); return }
+    if (selectedId == null) { setMetrics(null); setChartRange(null); return }
     const seq = ++requestSeq.current
     setMetricsLoading(true)
     setMetricsError('')
     api.getAccessPointMetrics(selectedId, windowMinutes)
       .then(data => {
         if (seq !== requestSeq.current) return // a newer request already landed — discard this stale one
+        const end = Date.now()
+        setChartRange([end - windowMinutes * 60_000, end])
         setMetrics(data)
       })
       .catch(e => {
@@ -186,18 +199,18 @@ export default function Metrics() {
                 <div className="flex items-center justify-center h-40 text-gray-500 text-sm bg-gray-900 border border-gray-800 rounded-xl">
                   Loading…
                 </div>
-              ) : metrics && Object.keys(metrics).length > 0 ? (
+              ) : metrics && Object.keys(metrics).length > 0 && chartRange ? (
                 <div className="space-y-4">
                   {Object.entries(metrics).map(([band, points]) => (
                     <div key={band} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                       <p className="text-sm text-sky-400 font-medium mb-3">{band === 'unknown' ? 'Client bucket (no per-radio breakdown reported)' : band}</p>
                       <div className="space-y-4">
                         {band !== 'unknown' && (
-                          <MetricChart data={points} dataKey="utilization_pct" label="Channel Utilization" color="#38bdf8" unit="%" />
+                          <MetricChart data={points} dataKey="utilization_pct" label="Channel Utilization" color="#38bdf8" unit="%" range={chartRange} />
                         )}
-                        <MetricChart data={points} dataKey="client_count" label="Client Count" color="#34d399" />
+                        <MetricChart data={points} dataKey="client_count" label="Client Count" color="#34d399" range={chartRange} />
                         {band !== 'unknown' && (
-                          <MetricChart data={points} dataKey="retry_pct" label="Retry Rate" color="#f59e0b" unit="%" />
+                          <MetricChart data={points} dataKey="retry_pct" label="Retry Rate" color="#f59e0b" unit="%" range={chartRange} />
                         )}
                       </div>
                     </div>
