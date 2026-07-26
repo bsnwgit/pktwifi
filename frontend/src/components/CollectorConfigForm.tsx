@@ -1,4 +1,4 @@
-import { FieldSchema, Site } from '../api/client'
+import { FieldSchema, Site, WifiCredential } from '../api/client'
 import SiteSelect from './SiteSelect'
 
 /**
@@ -89,11 +89,19 @@ function HostListInput({ field, value, onChange, sites }: {
   )
 }
 
-export default function CollectorConfigForm({ fields, value, onChange, sites }: {
+const CRED_TYPE_LABELS: Record<string, string> = {
+  userpass: 'username & password',
+  api_key: 'API key',
+  snmp_v2c: 'SNMP v2c',
+  snmp_v3: 'SNMP v3',
+}
+
+export default function CollectorConfigForm({ fields, value, onChange, sites, credentials }: {
   fields: FieldSchema[]
   value: Record<string, unknown>
   onChange: (key: string, v: unknown) => void
   sites: Site[]
+  credentials: WifiCredential[]
 }) {
   if (fields.length === 0) {
     return <p className="text-sm text-white py-3">This collector type has no configurable fields yet.</p>
@@ -184,6 +192,27 @@ export default function CollectorConfigForm({ fields, value, onChange, sites }: 
                 <SiteSelect sites={sites} value={(raw as string) ?? ''} onChange={v => onChange(field.key, v)} className={inputCls} />
               </FieldWrapper>
             )
+          case 'credential_select': {
+            const allowed = credentials.filter(c => !field.cred_types || field.cred_types.includes(c.cred_type))
+            return (
+              <FieldWrapper key={field.key} field={field}>
+                <select value={(raw as number) ?? ''}
+                  onChange={e => onChange(field.key, e.target.value === '' ? null : Number(e.target.value))}
+                  className={inputCls}>
+                  <option value="">— Select a credential —</option>
+                  {allowed.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} ({CRED_TYPE_LABELS[c.cred_type] ?? c.cred_type})</option>
+                  ))}
+                </select>
+                {allowed.length === 0 && (
+                  <p className="text-xs text-amber-400 mt-1">
+                    No matching credentials yet — add one under Settings → Credentials
+                    {field.cred_types?.length ? ` (type: ${field.cred_types.map(t => CRED_TYPE_LABELS[t] ?? t).join(' or ')})` : ''}.
+                  </p>
+                )}
+              </FieldWrapper>
+            )
+          }
           default:
             return null
         }

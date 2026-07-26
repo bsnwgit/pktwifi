@@ -168,6 +168,14 @@ export const api = {
   deleteCollector: (id: number) => request(`/collectors/${id}`, { method: 'DELETE' }),
   pollCollectorNow: (id: number) => request<{ status: string; access_points: number; clients: number }>(`/collectors/${id}/poll-now`, { method: 'POST' }),
 
+  // -- Credentials (Settings -> Credentials library) -----------------------------------
+  getCredentials: () => request<WifiCredential[]>('/credentials'),
+  createCredential: (body: WifiCredentialInput) =>
+    request<WifiCredential>('/credentials', { method: 'POST', body: JSON.stringify(body) }),
+  updateCredential: (id: number, body: WifiCredentialInput) =>
+    request<WifiCredential>(`/credentials/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteCredential: (id: number) => request(`/credentials/${id}`, { method: 'DELETE' }),
+
   // -- Sites ---------------------------------------------------------------------
   getSites: () => request<Site[]>('/sites'),
   createSite: (body: { name: string; description?: string | null }) => request<Site>('/sites', { method: 'POST', body: JSON.stringify(body) }),
@@ -483,7 +491,7 @@ export type LogQueryParams = {
   offset?: string
 }
 
-export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'select' | 'multiselect' | 'string_list' | 'host_list' | 'site_select'
+export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'select' | 'multiselect' | 'string_list' | 'host_list' | 'site_select' | 'credential_select'
 
 export interface FieldOption {
   value: string
@@ -507,6 +515,40 @@ export interface FieldSchema {
   sub_fields?: FieldSchema[]     // host_list — columns per row
   item_placeholder?: string      // string_list
   show_if?: FieldShowIf          // only render when another field in the same form equals a value
+  cred_types?: string[]          // credential_select — which credential types the dropdown offers
+}
+
+export type CredType = 'userpass' | 'api_key' | 'snmp_v2c' | 'snmp_v3'
+
+export interface WifiCredential {
+  id: number
+  name: string
+  description: string
+  cred_type: CredType
+  username: string | null
+  auth_protocol: string | null
+  priv_protocol: string | null
+  has_password: boolean
+  has_api_key: boolean
+  has_community: boolean
+  has_auth_password: boolean
+  has_priv_password: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface WifiCredentialInput {
+  name: string
+  description?: string
+  cred_type: CredType
+  username?: string | null
+  password?: string | null
+  api_key?: string | null
+  community?: string | null
+  auth_protocol?: string | null
+  auth_password?: string | null
+  priv_protocol?: string | null
+  priv_password?: string | null
 }
 
 export interface Site {

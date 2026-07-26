@@ -29,6 +29,21 @@ def _fernet() -> Fernet:
     return Fernet(key.encode())
 
 
+def encrypt_str(value: str) -> str:
+    """Encrypt a single secret string (credential library columns), as opposed
+    to the whole-config blob used for collectors.config_json."""
+    return _fernet().encrypt(value.encode()).decode()
+
+
+def decrypt_str(token: str | None) -> str:
+    if not token:
+        return ""
+    try:
+        return _fernet().decrypt(token.encode()).decode()
+    except InvalidToken:
+        return ""
+
+
 def encrypt_config(config: dict) -> str:
     return _fernet().encrypt(json.dumps(config).encode()).decode()
 

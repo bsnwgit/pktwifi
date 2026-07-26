@@ -87,6 +87,22 @@ def host_list(key: str, label: str, sub_fields: list[dict], *, help: str = "",
             "show_if": _show_if(show_if)}
 
 
+def credential_select(key: str, label: str, *, cred_types: list[str], required: bool = False,
+                      help: str = "", show_if: tuple[str, str] | None = None) -> dict:
+    """A dropdown populated from the app's managed credential library
+    (/api/credentials, Settings -> Credentials) instead of asking a
+    controller's own setup form to re-collect usernames/passwords/API keys/
+    SNMP auth inline every time — same pattern as pktsnmp's Settings ->
+    SNMP -> Credentials tab and pktipam's credential_select. `cred_types`
+    filters the dropdown to matching entries (e.g. only api_key credentials
+    for Meraki). The frontend fetches the credential list itself; this
+    schema entry just marks the field as that kind of picker. Resolved to
+    real auth fields at poll time by app/wifi/poll_engine.resolve_credential,
+    not by the collector itself."""
+    return {"key": key, "label": label, "type": "credential_select", "required": required,
+            "cred_types": cred_types, "help": help, "show_if": _show_if(show_if)}
+
+
 def site_select(key: str, label: str, *, help: str = "", show_if: tuple[str, str] | None = None) -> dict:
     """A dropdown populated from the app's managed Sites list (/api/sites)
     instead of a free-typed string — same UX as SiteSelect.tsx elsewhere in

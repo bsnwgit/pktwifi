@@ -74,7 +74,6 @@ const NAV = [
   { to: '/clients',        label: 'Clients',       icon: '▤', adminOnly: false },
   { to: '/alerts',         label: 'Alerts',        icon: '△', adminOnly: false },
   { to: '/logs',           label: 'Logs',          icon: '≡', adminOnly: false },
-  { to: '/collectors',     label: 'Collectors',    icon: '⇅', adminOnly: true },
   { to: '/sites',          label: 'Sites',         icon: '⚑', adminOnly: true },
   { to: '/settings',       label: 'Settings',      icon: '⚙', adminOnly: true },
 ]
