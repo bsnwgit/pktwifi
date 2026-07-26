@@ -27,6 +27,7 @@ class ClientReading:
     snr_db: float | None = None
     tx_rate_mbps: float | None = None
     rx_rate_mbps: float | None = None
+    connected_at: str | None = None  # ISO 8601, when the collector's own API reports a real one
 
 
 @dataclass

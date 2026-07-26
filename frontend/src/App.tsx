@@ -7,10 +7,9 @@ import { lazy, Suspense } from 'react'
 const Dashboard     = lazy(() => import('./pages/Dashboard'))
 const AccessPoints  = lazy(() => import('./pages/AccessPoints'))
 const Clients       = lazy(() => import('./pages/Clients'))
+const Metrics       = lazy(() => import('./pages/Metrics'))
 const Alerts        = lazy(() => import('./pages/Alerts'))
 const Logs          = lazy(() => import('./pages/Logs'))
-const Collectors    = lazy(() => import('./pages/Collectors'))
-const Sites         = lazy(() => import('./pages/Sites'))
 const Settings      = lazy(() => import('./pages/Settings'))
 
 function PageFallback() {
@@ -53,6 +52,11 @@ export default function App() {
               <Suspense fallback={<PageFallback />}><Clients /></Suspense>
             </ProtectedRoute>
           } />
+          <Route path="/metrics" element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageFallback />}><Metrics /></Suspense>
+            </ProtectedRoute>
+          } />
           <Route path="/alerts" element={
             <ProtectedRoute>
               <Suspense fallback={<PageFallback />}><Alerts /></Suspense>
@@ -63,16 +67,7 @@ export default function App() {
               <Suspense fallback={<PageFallback />}><Logs /></Suspense>
             </ProtectedRoute>
           } />
-          <Route path="/collectors" element={
-            <AdminRoute>
-              <Suspense fallback={<PageFallback />}><Collectors /></Suspense>
-            </AdminRoute>
-          } />
-          <Route path="/sites" element={
-            <AdminRoute>
-              <Suspense fallback={<PageFallback />}><Sites /></Suspense>
-            </AdminRoute>
-          } />
+          <Route path="/sites" element={<Navigate to="/settings?tab=sites" replace />} />
           <Route path="/integrations" element={<Navigate to="/settings" replace />} />
           <Route path="/settings" element={
             <AdminRoute>

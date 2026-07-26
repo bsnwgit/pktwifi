@@ -8,7 +8,7 @@ to the others in this package and adding one entry here.
 """
 from __future__ import annotations
 
-from app.wifi.collectors.field_schema import text, password, number, toggle, select, string_list, host_list, site_select
+from app.wifi.collectors.field_schema import text, number, toggle, select, string_list, host_list, site_select, credential_select
 from app.wifi.collectors.base import Collector
 from app.wifi.collectors.snmp_generic import SnmpGenericCollector
 from app.wifi.collectors.cisco_meraki import CiscoMerakiCollector
@@ -23,13 +23,8 @@ COLLECTOR_TYPES: dict[str, dict] = {
         "implemented": True,
         "cls": SnmpGenericCollector,
         "fields": [
-            select("version", "SNMP version", [("v2c", "v2c"), ("v3", "v3")], default="v2c"),
-            password("community", "Community string", placeholder="public", help="v2c only"),
-            text("username", "Username", help="v3 only"),
-            select("auth_protocol", "Auth protocol", [("SHA", "SHA"), ("MD5", "MD5")], default="SHA", help="v3 only"),
-            password("auth_password", "Auth password", help="v3 only"),
-            select("priv_protocol", "Privacy protocol", [("AES", "AES"), ("DES", "DES")], default="AES", help="v3 only"),
-            password("priv_password", "Privacy password", help="v3 only"),
+            credential_select("credential_id", "SNMP credential", cred_types=["snmp_v2c", "snmp_v3"], required=True,
+                              help="Managed under Settings -> Credentials — determines v2c community or v3 auth"),
             number("port", "SNMP port", default=161),
             host_list("hosts", "Access points / controllers to poll", [
                 text("ip", "IP address", required=True, placeholder="10.0.0.5"),
@@ -44,7 +39,9 @@ COLLECTOR_TYPES: dict[str, dict] = {
         "implemented": True,
         "cls": CiscoMerakiCollector,
         "fields": [
-            password("api_key", "API key", required=True, help="Dashboard -> My Profile -> API access"),
+            credential_select("credential_id", "API key credential", cred_types=["api_key"], required=True,
+                              help="An API-key credential from Settings -> Credentials "
+                                   "(key from Dashboard -> My Profile -> API access)"),
             text("organization_id", "Organization ID", required=True, help="GET /organizations to find this"),
             string_list("network_ids", "Network IDs", item_placeholder="N_1234567890",
                         help="Leave empty to include every wireless network in the org"),
@@ -61,10 +58,13 @@ COLLECTOR_TYPES: dict[str, dict] = {
                    [("userpass", "Username & password"), ("api_key", "API key")], default="userpass", required=True,
                    help="API key requires a UniFi OS console (UDM/UDM-Pro/Cloud Gateway) with the official "
                         "Network Integration API enabled — Settings -> Control Plane -> Integrations"),
-            text("username", "Username", required=True, show_if=("auth_method", "userpass")),
-            password("password", "Password", required=True, show_if=("auth_method", "userpass")),
-            password("api_key", "API key", required=True, show_if=("auth_method", "api_key"),
-                      help="Generated in the UniFi OS console under Settings -> Control Plane -> Integrations"),
+            credential_select("credential_id", "Controller credential", cred_types=["userpass"], required=True,
+                              show_if=("auth_method", "userpass"),
+                              help="A username & password credential from Settings -> Credentials"),
+            credential_select("credential_id", "API key credential", cred_types=["api_key"], required=True,
+                              show_if=("auth_method", "api_key"),
+                              help="An API-key credential from Settings -> Credentials (key generated in the "
+                                   "UniFi OS console under Settings -> Control Plane -> Integrations)"),
             site_select("site", "Site", help="Must match the site name/description as configured on the controller"),
             toggle("udm", "UDM / UDM-Pro / Cloud Key Gen2+", default=False,
                    show_if=("auth_method", "userpass"),
