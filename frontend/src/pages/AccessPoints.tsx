@@ -163,9 +163,12 @@ export default function AccessPoints() {
             )}
           </tbody>
         </table>
+        {aps.length > 0 && (
+          <div className="px-4 py-2 border-t border-gray-800 text-xs text-gray-500">
+            Showing {((page - 1) * PAGE_SIZE + 1).toLocaleString()}–{((page - 1) * PAGE_SIZE + aps.length).toLocaleString()} of {total.toLocaleString()} access points
+          </div>
+        )}
       </div>
-
-      <Pagination page={page} totalPages={Math.max(1, Math.ceil(total / PAGE_SIZE))} onChange={load} />
 
       {selected && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 overflow-y-auto py-8" onClick={() => setSelected(null)}>

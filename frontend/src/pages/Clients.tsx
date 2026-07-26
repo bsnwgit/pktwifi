@@ -126,9 +126,12 @@ export default function Clients() {
             )}
           </tbody>
         </table>
+        {clients.length > 0 && (
+          <div className="px-4 py-2 border-t border-gray-800 text-xs text-gray-500">
+            Showing {((page - 1) * PAGE_SIZE + 1).toLocaleString()}–{((page - 1) * PAGE_SIZE + clients.length).toLocaleString()} of {total.toLocaleString()} clients
+          </div>
+        )}
       </div>
-
-      <Pagination page={page} totalPages={Math.max(1, Math.ceil(total / PAGE_SIZE))} onChange={load} />
     </div>
   )
 }
