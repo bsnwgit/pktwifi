@@ -4,7 +4,8 @@ import { api, WifiClient } from '../api/client'
 import Pagination from '../components/Pagination'
 import HelpButton from '../components/HelpButton'
 
-const PAGE_SIZE = 50
+const PAGE_SIZE_DEFAULT = 25
+const PAGE_SIZE_OPTIONS = [25, 50, 75, 100]
 
 function fmtConnected(iso: string | null): string {
   if (!iso) return '—'
@@ -22,13 +23,14 @@ export default function Clients() {
   const apFilterId   = searchParams.get('access_point_id')
   const apFilterName = searchParams.get('access_point_name')
 
-  const [clients, setClients] = useState<WifiClient[]>([])
-  const [total, setTotal]     = useState(0)
-  const [page, setPage]       = useState(1)
-  const [search, setSearch]   = useState('')
-  const [loading, setLoading] = useState(true)
+  const [clients, setClients]   = useState<WifiClient[]>([])
+  const [total, setTotal]       = useState(0)
+  const [page, setPage]         = useState(1)
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT)
+  const [search, setSearch]     = useState('')
+  const [loading, setLoading]   = useState(true)
 
-  const load = useCallback((toPage = 1) => {
+  const load = useCallback((toPage = 1, size = pageSize) => {
     setLoading(true)
     setPage(toPage)
     const filters = {
@@ -36,15 +38,20 @@ export default function Clients() {
       search: search || undefined,
     }
     Promise.all([
-      api.getClients({ ...filters, limit: PAGE_SIZE, offset: (toPage - 1) * PAGE_SIZE }),
+      api.getClients({ ...filters, limit: size, offset: (toPage - 1) * size }),
       api.countClients(filters),
     ])
       .then(([rows, countRes]) => { setClients(rows); setTotal(countRes.total) })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [apFilterId, search])
+  }, [apFilterId, search, pageSize])
 
   useEffect(() => { load(1) }, [load])
+
+  const changePageSize = (size: number) => {
+    setPageSize(size)
+    load(1, size)
+  }
 
   const clearApFilter = () => {
     const next = new URLSearchParams(searchParams)
@@ -72,7 +79,7 @@ export default function Clients() {
       <div className="flex items-center gap-3 flex-wrap">
         <input
           type="text"
-          placeholder="Search hostname, MAC, IP, SSID…"
+          placeholder="Search hostname, MAC, IP, SSID, band, channel, signal, rate…"
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="text-sm bg-gray-800 border border-gray-700 text-white placeholder-gray-500 rounded-lg px-3 py-1.5 w-64 focus:outline-none focus:border-sky-500"
@@ -88,7 +95,22 @@ export default function Clients() {
         )}
       </div>
 
-      <Pagination page={page} totalPages={Math.max(1, Math.ceil(total / PAGE_SIZE))} onChange={load} />
+      <div className="flex items-center justify-center gap-6">
+        <Pagination page={page} totalPages={Math.max(1, Math.ceil(total / pageSize))} onChange={load} />
+        <div className="flex items-center gap-2">
+          <label htmlFor="clients-per-page" className="text-xs text-gray-400">Clients per page:</label>
+          <select
+            id="clients-per-page"
+            value={pageSize}
+            onChange={e => changePageSize(Number(e.target.value))}
+            className="text-sm bg-gray-800 border border-gray-700 text-white rounded-lg px-2 py-1 focus:outline-none focus:border-sky-500"
+          >
+            {PAGE_SIZE_OPTIONS.map(size => (
+              <option key={size} value={size}>{size}</option>
+            ))}
+          </select>
+        </div>
+      </div>
 
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         <table className="w-full text-sm">
@@ -132,7 +154,7 @@ export default function Clients() {
         </table>
         {clients.length > 0 && (
           <div className="px-4 py-2 border-t border-gray-800 text-xs text-gray-500">
-            Showing {((page - 1) * PAGE_SIZE + 1).toLocaleString()}–{((page - 1) * PAGE_SIZE + clients.length).toLocaleString()} of {total.toLocaleString()} clients
+            Showing {((page - 1) * pageSize + 1).toLocaleString()}–{((page - 1) * pageSize + clients.length).toLocaleString()} of {total.toLocaleString()} clients
           </div>
         )}
       </div>

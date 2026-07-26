@@ -57,9 +57,15 @@ def _list_filters(access_point_id: int | None, ssid: str | None, search: str | N
         where += " AND wc.ssid = ?"
         params.append(ssid)
     if search:
-        where += " AND (wc.hostname LIKE ? OR wc.mac_address LIKE ? OR wc.ip_address LIKE ? OR wc.ssid LIKE ?)"
+        where += """ AND (
+            wc.hostname LIKE ? OR wc.mac_address LIKE ? OR wc.ip_address LIKE ? OR wc.ssid LIKE ?
+            OR wc.band LIKE ? OR CAST(r.channel AS TEXT) LIKE ? OR CAST(r.channel_width_mhz AS TEXT) LIKE ?
+            OR CAST(wc.rssi_dbm AS TEXT) LIKE ? OR CAST(wc.snr_db AS TEXT) LIKE ?
+            OR CAST(wc.tx_rate_mbps AS TEXT) LIKE ? OR CAST(wc.rx_rate_mbps AS TEXT) LIKE ?
+            OR wc.connected_at LIKE ? OR wc.last_seen LIKE ?
+        )"""
         like = f"%{search}%"
-        params.extend([like, like, like, like])
+        params.extend([like] * 13)
     return where, params
 
 
@@ -92,7 +98,8 @@ async def count_clients(
     db: aiosqlite.Connection = Depends(get_db),
 ):
     where, params = _list_filters(access_point_id, ssid, search)
-    async with db.execute("SELECT COUNT(*) AS total FROM wifi_clients wc" + where, params) as cur:
+    query = "SELECT COUNT(*) AS total FROM wifi_clients wc LEFT JOIN radios r ON r.id = wc.radio_id" + where
+    async with db.execute(query, params) as cur:
         row = await cur.fetchone()
     return {"total": row["total"]}
 

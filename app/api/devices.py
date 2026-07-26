@@ -88,9 +88,12 @@ def _list_filters(status: str | None, site: str | None, search: str | None) -> t
         where += " AND site = ?"
         params.append(site)
     if search:
-        where += " AND (name LIKE ? OR mac_address LIKE ? OR ip_address LIKE ? OR vendor LIKE ? OR model LIKE ?)"
+        where += """ AND (
+            name LIKE ? OR mac_address LIKE ? OR ip_address LIKE ? OR vendor LIKE ? OR model LIKE ?
+            OR status LIKE ? OR site LIKE ? OR floor LIKE ? OR last_seen LIKE ?
+        )"""
         like = f"%{search}%"
-        params.extend([like, like, like, like, like])
+        params.extend([like] * 9)
     return where, params
 
 
