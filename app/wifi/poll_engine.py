@@ -109,27 +109,35 @@ async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResu
 
             for client in radio.clients:
                 async with db.execute(
-                    "SELECT access_point_id FROM wifi_clients WHERE mac_address = ?", (client.mac_address,)
+                    "SELECT access_point_id, connected_at FROM wifi_clients WHERE mac_address = ?",
+                    (client.mac_address,),
                 ) as ccur:
                     prev = await ccur.fetchone()
                 prev_ap_id = prev[0] if prev else None
+                # Prefer a real connected_at freshly reported by the collector
+                # (e.g. UniFi's Integration API — updates correctly across a
+                # roam/reconnect) over whatever was already stored; fall back
+                # to the existing value, and only invent "now" (via the SQL
+                # COALESCE below) for a client never seen before by a
+                # collector that doesn't report one at all (generic SNMP,
+                # Meraki, UniFi userpass mode).
+                connected_at = client.connected_at or (prev[1] if prev else None)
 
                 await db.execute(
                     """INSERT INTO wifi_clients
                        (mac_address, access_point_id, radio_id, hostname, ip_address, ssid, band,
                         protocol, rssi_dbm, snr_db, tx_rate_mbps, rx_rate_mbps, connected_at, last_seen)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                               COALESCE((SELECT connected_at FROM wifi_clients WHERE mac_address = ?), datetime('now')),
-                               datetime('now'))
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(datetime(?), datetime('now')), datetime('now'))
                        ON CONFLICT(mac_address) DO UPDATE SET
                          access_point_id=excluded.access_point_id, radio_id=excluded.radio_id,
                          hostname=excluded.hostname, ip_address=excluded.ip_address, ssid=excluded.ssid,
                          band=excluded.band, protocol=excluded.protocol, rssi_dbm=excluded.rssi_dbm,
                          snr_db=excluded.snr_db, tx_rate_mbps=excluded.tx_rate_mbps, rx_rate_mbps=excluded.rx_rate_mbps,
+                         connected_at=excluded.connected_at,
                          last_seen=datetime('now')""",
                     (client.mac_address, ap_id, radio_id, client.hostname, client.ip_address, client.ssid,
                      radio.band, client.protocol, client.rssi_dbm, client.snr_db,
-                     client.tx_rate_mbps, client.rx_rate_mbps, client.mac_address),
+                     client.tx_rate_mbps, client.rx_rate_mbps, connected_at),
                 )
 
                 event_type = None
