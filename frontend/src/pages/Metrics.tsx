@@ -191,7 +191,7 @@ export default function Metrics() {
                   {Object.entries(metrics).map(([band, points]) => (
                     <div key={band} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                       <p className="text-sm text-sky-400 font-medium mb-3">{band === 'unknown' ? 'Client bucket (no per-radio breakdown reported)' : band}</p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <div className="space-y-4">
                         {band !== 'unknown' && (
                           <MetricChart data={points} dataKey="utilization_pct" label="Channel Utilization" color="#38bdf8" unit="%" />
                         )}
