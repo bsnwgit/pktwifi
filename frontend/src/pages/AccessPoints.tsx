@@ -6,7 +6,8 @@ import IpLink from '../components/IpLink'
 import Pagination from '../components/Pagination'
 import HelpButton from '../components/HelpButton'
 
-const PAGE_SIZE = 50
+const PAGE_SIZE_DEFAULT = 25
+const PAGE_SIZE_OPTIONS = [25, 50, 75, 100]
 
 function StatusDot({ status }: { status: string }) {
   const color = status === 'online' ? 'bg-green-400' : status === 'offline' ? 'bg-red-400' : 'bg-gray-500'
@@ -60,6 +61,7 @@ export default function AccessPoints() {
   const [aps, setAps]         = useState<AccessPoint[]>([])
   const [total, setTotal]     = useState(0)
   const [page, setPage]       = useState(1)
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT)
   const [search, setSearch]   = useState('')
   const [status, setStatus]   = useState('')
   const [loading, setLoading] = useState(true)
@@ -68,20 +70,25 @@ export default function AccessPoints() {
   const [selClients, setSelClients] = useState<WifiClient[]>([])
   const [detailLoading, setDetailLoading] = useState(false)
 
-  const load = useCallback((toPage = 1) => {
+  const load = useCallback((toPage = 1, size = pageSize) => {
     setLoading(true)
     setPage(toPage)
     const filters = { search: search || undefined, status: status || undefined }
     Promise.all([
-      api.getAccessPoints({ ...filters, limit: PAGE_SIZE, offset: (toPage - 1) * PAGE_SIZE }),
+      api.getAccessPoints({ ...filters, limit: size, offset: (toPage - 1) * size }),
       api.countAccessPoints(filters),
     ])
       .then(([rows, countRes]) => { setAps(rows); setTotal(countRes.total) })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [search, status])
+  }, [search, status, pageSize])
 
   useEffect(() => { load(1) }, [load])
+
+  const changePageSize = (size: number) => {
+    setPageSize(size)
+    load(1, size)
+  }
 
   const openDetail = async (id: number) => {
     setDetailLoading(true)
@@ -150,7 +157,22 @@ export default function AccessPoints() {
         )}
       </div>
 
-      <Pagination page={page} totalPages={Math.max(1, Math.ceil(total / PAGE_SIZE))} onChange={load} />
+      <div className="flex items-center justify-center gap-6">
+        <Pagination page={page} totalPages={Math.max(1, Math.ceil(total / pageSize))} onChange={load} />
+        <div className="flex items-center gap-2">
+          <label htmlFor="access-points-per-page" className="text-xs text-gray-400">Access points per page:</label>
+          <select
+            id="access-points-per-page"
+            value={pageSize}
+            onChange={e => changePageSize(Number(e.target.value))}
+            className="text-sm bg-gray-800 border border-gray-700 text-white rounded-lg px-2 py-1 focus:outline-none focus:border-sky-500"
+          >
+            {PAGE_SIZE_OPTIONS.map(size => (
+              <option key={size} value={size}>{size}</option>
+            ))}
+          </select>
+        </div>
+      </div>
 
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         <table className="w-full text-sm">
@@ -184,7 +206,7 @@ export default function AccessPoints() {
         </table>
         {aps.length > 0 && (
           <div className="px-4 py-2 border-t border-gray-800 text-xs text-gray-500">
-            Showing {((page - 1) * PAGE_SIZE + 1).toLocaleString()}–{((page - 1) * PAGE_SIZE + aps.length).toLocaleString()} of {total.toLocaleString()} access points
+            Showing {((page - 1) * pageSize + 1).toLocaleString()}–{((page - 1) * pageSize + aps.length).toLocaleString()} of {total.toLocaleString()} access points
           </div>
         )}
       </div>
