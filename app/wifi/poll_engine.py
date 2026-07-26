@@ -155,7 +155,9 @@ async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResu
     # Full-replace semantics per poll: an AP this collector stored before but
     # didn't report this time no longer exists on the controller (renamed,
     # removed, or — as with the pre-fix UniFi filter — was never an AP at
-    # all). Radios/metrics cascade via FK; wifi_clients rows are SET NULL.
+    # all). Radios/metrics cascade via FK; wifi_clients.access_point_id is
+    # SET NULL rather than cascade-deleted (a client that outlives its AP
+    # row still has real mac/hostname/connected_at worth keeping briefly).
     seen_ids = [ap.external_id for ap in result.access_points]
     placeholders = ",".join("?" * len(seen_ids))
     await db.execute(
@@ -163,6 +165,14 @@ async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResu
         if seen_ids else "DELETE FROM access_points WHERE collector_id = ?",
         (collector_id, *seen_ids),
     )
+    # ...but nothing ever re-attaches a NULLed client to a new AP row, and no
+    # poll ever touches it again once orphaned — it just sits forever with
+    # every field but mac/hostname/connected_at permanently blank. This bit
+    # real data: the AP-type-filter fix (switches/gateways wrongly ingested
+    # as APs, then correctly removed) orphaned every wired/non-AP client
+    # that had been attached to one of those bogus rows. Sweep them here so
+    # an AP deletion can never again leave zombie client rows behind.
+    await db.execute("DELETE FROM wifi_clients WHERE access_point_id IS NULL")
     await db.commit()
 
 
