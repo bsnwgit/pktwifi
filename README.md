@@ -23,8 +23,8 @@ assistant.
 - [Installation](#installation)
 - [Frontend Build & Deploy](#frontend-build--deploy)
 - [Feature Inventory](#feature-inventory)
-- [Sites](#sites)
 - [Vendor Collectors](#vendor-collectors)
+- [Metrics](#metrics)
 - [Configuration Reference](#configuration-reference)
 - [Running & Managing the Service](#running--managing-the-service)
 - [Settings](#settings)
@@ -158,9 +158,11 @@ Two independent data paths feed pktWiFi, matching how it was scoped:
    sibling app (Settings -> Security -> Suite Integration) but does not yet
    have its own dedicated client module.
 
-Everything else — Dashboard, Access Points, Clients, Alerts, Logs,
-Collectors, Sites, Settings — is standard FastAPI routers under `app/api/`
-serving a React SPA (`frontend/`) built with Vite. See
+Everything else — Dashboard, Access Points, Clients, Metrics, Alerts, Logs,
+Settings — is standard FastAPI routers under `app/api/` serving a React SPA
+(`frontend/`) built with Vite. Controller (formerly "Collector") management,
+the credential library, and Sites all live inside Settings rather than as
+their own top-level nav items — see [Settings](#settings). See
 [Feature Inventory](#feature-inventory) for the full current page/tab list.
 
 ---
@@ -208,13 +210,17 @@ Sidebar navigation (`frontend/src/components/Layout.tsx`):
 | Page | Access | What it does |
 |---|---|---|
 | **Dashboard** | all roles | AP counts (total/online/offline/rogue), connected client count, active alerts list, recent AP status at a glance. |
-| **Access Points** | all roles | Full AP inventory across every collector — status, vendor, model, firmware, per-radio channel/utilization/noise-floor where the collector supplies it. |
-| **Clients** | all roles | Connected client list with RSSI/SNR, SSID, protocol, tx/rx rate, which AP/radio they're attached to. |
+| **Access Points** | all roles | Searchable, server-side-paginated AP inventory across every controller — status, vendor, model, firmware. Click a row for a detail panel: per-radio channel/utilization/retry data where the controller supplies it, and connected clients grouped by the actual radio/channel they're attached to (see [Vendor Collectors](#vendor-collectors) for the UniFi API-key-mode caveat on that). A client row jumps to Clients pre-filtered to that AP; **View Metrics →** opens [Metrics](#metrics) pre-selected to that AP. |
+| **Clients** | all roles | Searchable, server-side-paginated client list — SSID, band, channel, RSSI/SNR, tx/rx rate, real connect time (**Connected** column — see the UniFi collector notes on what's actually reported per auth mode), which AP it's attached to. Supports an `?access_point_id=` filter (with a clearable chip) used by the Access Points detail panel's click-through. |
+| **Metrics** | all roles | Dedicated time-series view — pick an AP from the searchable left-hand list, see per-band channel-utilization/retry-rate/client-count charts for a 1h/6h/24h/7d window; see [Metrics](#metrics). |
 | **Alerts** | all roles (analyst+ can ack/resolve) | Alert rules + fired events; see [Alerting & Notifications](#alerting--notifications). |
 | **Logs** | all roles | AP/controller syslog and event context, including anything pulled in via the pktLog suite integration. |
-| **Collectors** | admin only | Add/edit/delete/poll vendor collectors through a schema-driven form; see [Vendor Collectors](#vendor-collectors). |
-| **Sites** | admin only | Small managed catalog of location names/descriptions; see [Sites](#sites). |
-| **Settings** | admin only | General, Security (Users/Auth/Suite Integration/AI Assistant/SSL-TLS), Data (Storage/Backups), Notifications, User Keys, System; see [Settings](#settings). |
+| **Settings** | admin only | General, Security (Users/Auth/Suite Integration/AI Assistant/SSL-TLS), Data (Storage/Backups), Notifications, User Keys, Controllers, Credentials, Sites, System; see [Settings](#settings). |
+
+Controller management (formerly a separate top-level **Collectors** nav
+item) and the **Sites** catalog now live inside Settings, alongside a new
+**Credentials** tab — see [Settings](#settings) and
+[Vendor Collectors](#vendor-collectors).
 
 There's also a floating **AI Assistant** chat button available from any
 authenticated page (not a nav item) — see [AI Assistant](#ai-assistant).
@@ -229,48 +235,51 @@ outbound connections pktWiFi uses to call into sibling apps) live under
 
 ---
 
-## Sites
-
-**Sites** (its own admin-only sidebar item, separate from Settings) is a
-small managed catalog — just a name and an optional description per row
-(`app/api/sites.py`, `sites` table). Its only purpose is to populate the **Site** dropdown that appears
-in collector config forms (the SNMP generic collector's per-host `site`
-field, and the UniFi collector's top-level `site` field) instead of
-free-typing a location name and risking typo'd duplicates ("HQ" / "Hq" /
-"headquarters" all meaning the same place).
-
-Deleting a site here does not touch collectors already referencing that
-name — it just stops showing up as a dropdown choice going forward.
-
-**Do not confuse this with a UniFi controller's own "Site" concept.** A
-UniFi controller/UDM can itself be multi-site, and each of its sites has
-both a display name (shown in the UniFi UI) and a separate URL slug (never
-shown in the UI). When configuring a UniFi collector, the value you put in
-the **Site** field here should match how you refer to that location — the
-collector resolves it against the controller's actual sites at poll time
-regardless of whether you typed the display name or the slug (see
-[Vendor Collectors](#vendor-collectors) and
-[docs/collector-setup.md](docs/collector-setup.md) for the exact
-resolution behavior and its gotchas).
-
----
-
 ## Vendor Collectors
 
-Configured under **Collectors** in the UI (admin only). Each collector is
-one row: a name, a type, a poll interval, an enabled toggle, and a config
-form. As of the structured-config rebuild, that form is **schema-driven**
-(`app/wifi/collectors/field_schema.py` + `frontend/src/components/
-CollectorConfigForm.tsx`) — fields render as real text/password/number/
-toggle/select/multiselect/host-list/site-picker inputs with per-field help
-text and conditional (`show_if`) fields, instead of a raw JSON textarea.
-An **"Edit as JSON"** link is still available in the Collector modal as an
-escape hatch/power-user path — it round-trips through the same config dict.
-Secret fields (API keys, passwords, SNMP v3 auth) are Fernet-encrypted at
-rest using `credential_key` (see
-[Configuration Reference](#configuration-reference)).
+Controllers are configured under **Settings -> Controllers** (admin only —
+this was a separate top-level **Collectors** nav item before this
+functionality moved into Settings alongside the new Credentials tab; the
+term "controller" is now used in the UI, though the backend API/DB still
+say "collector" throughout). Each controller is one row: a name, a type, a
+poll interval, an enabled toggle, and a config form. That form is
+**schema-driven** (`app/wifi/collectors/field_schema.py` + `frontend/src/
+components/CollectorConfigForm.tsx`) — fields render as real text/password/
+number/toggle/select/multiselect/host-list/site-picker/credential-picker
+inputs with per-field help text and conditional (`show_if`) fields, instead
+of a raw JSON textarea. An **"Edit as JSON"** link is still available in the
+Controller modal as an escape hatch/power-user path — it round-trips
+through the same config dict.
 
-Each collector row has a **Poll Now** action that polls immediately
+**Credentials** (`Settings -> Credentials`, admin only) is a separate named
+credential library — four types (username/password, API key/token, SNMP
+v2c, SNMP v3), Fernet-encrypted at rest and write-only through the API
+(a saved secret is never returned, and editing with a blank secret field
+keeps the stored value). A controller's config form references a saved
+credential via a typed dropdown (filtered to the credential types that
+controller type actually uses) instead of asking you to re-type a
+username/password/API key/community string inline every time you add a
+controller. Deleting a credential still referenced by a controller is
+blocked — the error names which controller(s) are using it. The Controller
+modal also has a **Test Credentials** button (once a credential is
+selected) that runs a real, save-nothing auth attempt against the target
+currently in the form — a UniFi login or Integration API call, a Meraki
+`/organizations` call, or an SNMP `sysDescr` GET — and shows pass/fail with
+the full error inline, so you can verify a credential works before ever
+creating (or polling) the controller itself.
+
+**Sites** (`Settings -> Sites`, admin only) is a small managed catalog —
+just a name and an optional description per row (`app/api/sites.py`,
+`sites` table). Its only purpose is to populate the **Site** dropdown that
+appears in controller config forms (the SNMP generic collector's per-host
+`site` field, and the UniFi collector's top-level `site` field) instead of
+free-typing a location name and risking typo'd duplicates ("HQ" / "Hq" /
+"headquarters" all meaning the same place). Deleting a site here does not
+touch controllers already referencing that name — it just stops showing up
+as a dropdown choice going forward. **Do not confuse this with a UniFi
+controller's own "Site" concept** — see the site-slug note below.
+
+Each controller row has a **Poll Now** action that polls immediately
 (instead of waiting for its interval) and reports the AP/client counts
 inline on success. On failure it shows a short "Failed — see error" link;
 clicking it (or the link is also shown automatically) opens a modal with
@@ -297,11 +306,14 @@ shows:
   standalone UniFi Network Application and a UDM/UDM-Pro/Cloud Key Gen2+
   console (toggle **UDM / UDM-Pro / Cloud Key Gen2+** for the latter —
   paths get proxied under `/proxy/network`). Gives rich per-radio
-  (channel/utilization/noise-floor) and per-client detail. Use a dedicated
-  local (non-cloud) read-only admin account, not your own login.
+  (channel/utilization/noise-floor) and per-client detail. Auth comes from
+  a **username/password credential** picked via dropdown from the
+  Credentials library (`Settings -> Credentials`), not typed inline — use a
+  dedicated local (non-cloud) read-only admin account, not your own login.
 - **API key** — Ubiquiti's official local Network Integration API v1
   (`/proxy/network/integration/v1`), authenticated with an `X-API-KEY`
-  header. Only available on a UniFi OS console (UDM/UDM-Pro/Cloud Gateway)
+  header sourced from an **API key credential** in the Credentials
+  library. Only available on a UniFi OS console (UDM/UDM-Pro/Cloud Gateway)
   with Integrations enabled under Settings -> Control Plane ->
   Integrations in the UniFi UI — no standalone-controller equivalent
   exists. **Verified against a live UDM-Pro.** AP-level detail is real:
@@ -317,7 +329,10 @@ shows:
   breakdown" bucket in the UI (Access Points detail panel, Clients page
   Channel column) — that's the API telling the truth about what it knows,
   not a bug. Switch the controller to username/password mode for full
-  per-client SSID/signal/rate/channel detail.
+  per-client SSID/signal/rate/channel detail. One field it does report
+  usefully: a real `connectedAt` per client, which pktwifi stores as the
+  Clients page's **Connected** column instead of inventing a "first seen
+  by pktwifi" timestamp the way it used to.
 
 **Site slug gotcha (username/password mode):** a UniFi controller's Site
 concept has two names — the one shown in the UniFi UI (the `desc` field)
@@ -345,6 +360,43 @@ Add a new vendor by writing a `Collector` subclass (see `base.py` for the
 entry, and registering both in `app/wifi/collectors/registry.py`. See also
 [docs/collector-setup.md](docs/collector-setup.md) for per-vendor config
 field reference.
+
+---
+
+## Metrics
+
+A dedicated **Metrics** page (`frontend/src/pages/Metrics.tsx`, left nav
+between Clients and Alerts) — pick an AP from the searchable list on the
+left, then see its RF history on the right: **Channel Utilization** and
+**Retry Rate** per real radio band, plus **Client Count** (which also
+works for the UniFi API-key-mode "no per-radio breakdown" bucket, since
+that's tracked as its own radio row even without a channel). Backed by
+`GET /api/metrics/access-points/{id}?since_minutes=N`
+(`app/api/metrics.py`), reading from the `radio_metrics` table the poll
+engine writes to every poll cycle.
+
+The time-window selector (1h/6h/24h/7d) is synced to the URL
+(`?ap=<id>&since=<minutes>`, so a link to a specific AP's metrics is
+shareable/bookmarkable) and applies immediately — no separate reload step.
+Two behaviors worth knowing if you're extending this page:
+
+- **The chart X-axis domain is anchored to the full selected window**
+  (`[fetchedAt - windowMinutes, fetchedAt]`), captured once per successful
+  fetch — not derived from the data's own min/max timestamps. A small
+  amount of real history (e.g. right after adding a new AP) renders as a
+  correctly-proportioned *slice* of a wide window with empty space around
+  it, instead of always stretching to fill the chart regardless of how
+  much of the window it actually covers.
+- **Requests are sequence-guarded** (`app/`-side: a ref-based counter in
+  `Metrics.tsx`, incremented per fetch) so a slow response from a
+  previously-selected AP or window can't land after a newer one and
+  silently overwrite it with stale data — the failure mode that made an
+  earlier version of this page look like changing the time range "did
+  nothing."
+
+The Access Points detail panel links out here via **View Metrics →**
+instead of embedding its own copy of these charts — keeps that panel's
+bundle small (recharts, the charting library, only loads on this page).
 
 ---
 
@@ -386,8 +438,13 @@ process without SSH.
 
 ## Settings
 
-Admin-only, reached via the **Settings** nav item. Organized as six
-top-level tabs, two of which have their own left-hand sub-tab strip:
+Admin-only, reached via the **Settings** nav item. Tabs are split by a
+visual divider into two groups: the suite-common set every pkt app shares
+(General through System), and pktWiFi-specific management (Controllers,
+Credentials, Sites) — the latter three used to be their own top-level nav
+items before this session folded them into Settings, matching the
+convention every other pkt app already used for app-specific management.
+Three tabs have their own left-hand sub-tab strip:
 
 | Tab | Sub-tabs | Covers |
 |---|---|---|
@@ -396,6 +453,10 @@ top-level tabs, two of which have their own left-hand sub-tab strip:
 | **Data** | Storage, Backups | See below. |
 | **Notifications** | — | Alert-channel config: Slack, Email (SMTP), PagerDuty, generic Webhook, TraceCat SOAR — see [Alerting & Notifications](#alerting--notifications). |
 | **User Keys** | — | Personal (per-user, not shared) external API keys — currently a Lucidchart Personal Access Token, used for exporting diagrams. Each user manages their own; nobody else, including admins, can see another user's key value. |
+| *(divider)* | | |
+| **Controllers** | — | Add/edit/delete/poll vendor controllers; see [Vendor Collectors](#vendor-collectors). |
+| **Credentials** | — | Named, reusable controller auth library; see [Vendor Collectors](#vendor-collectors). |
+| **Sites** | — | Small managed location catalog; see [Vendor Collectors](#vendor-collectors). |
 | **System** | — | Read-only version + install directory display. |
 
 ### Security sub-tabs
@@ -440,9 +501,9 @@ top-level tabs, two of which have their own left-hand sub-tab strip:
 
 ## Roles & Auth
 
-Three roles: `admin` (full access, including Collectors/Sites/Settings/
-Users), `analyst` (can edit access points, ack/resolve alerts), `viewer`
-(read-only).
+Three roles: `admin` (full access, including Settings and its Controllers/
+Credentials/Sites/Users tabs), `analyst` (can edit access points, ack/
+resolve alerts), `viewer` (read-only).
 
 Local username/password auth is always available; SAML 2.0 SSO can be
 layered on top via Settings -> Security -> Auth (same IdP-agnostic
@@ -586,13 +647,15 @@ Run `cd frontend && npm install && npm run build`, then
 `sudo systemctl restart pktwifi` (or use Settings -> General -> Restart
 Service once the UI itself is reachable).
 
-**Collector shows `status: error`** — check `last_error` on the Collectors
-page, or click **Poll Now** to get the full error in a copyable modal. For
-SNMP collectors this is almost always a reachability/community-string/
-v3-credential mismatch; for vendor API collectors, an auth or base-URL
-problem. For UniFi specifically, an error naming "no site found" usually
-means the **Site** field doesn't match either the display name or slug the
-controller actually has — see the site-slug note under
+**Controller shows `status: error`** — check `last_error` on the
+`Settings -> Controllers` page, or click **Poll Now** to get the full error
+in a copyable modal (the **Test Credentials** button in the controller form
+is often faster for isolating an auth problem before it ever gets to a real
+poll). For SNMP controllers this is almost always a reachability/
+community-string/v3-credential mismatch; for vendor API controllers, an
+auth or base-URL problem. For UniFi specifically, an error naming "no site
+found" usually means the **Site** field doesn't match either the display
+name or slug the controller actually has — see the site-slug note under
 [Vendor Collectors](#vendor-collectors).
 
 **No RF data despite an "online" AP** — the generic SNMP collector only
@@ -600,6 +663,13 @@ guarantees reachability (`sysUpTime`) and a best-effort standard-MIB
 channel read; real channel utilization/tx-power/noise-floor numbers need a
 vendor-native collector (Meraki, UniFi) or a future Aruba/Catalyst/Ruckus
 integration — see [Vendor Collectors](#vendor-collectors).
+
+**Clients all show "Unassigned" with no channel** — expected for a UniFi
+controller in API-key auth mode; that mode's Integration API doesn't
+attribute clients to a radio at all, so there's no channel to group by.
+Switch the controller to username/password auth for real per-client
+channel/SSID/signal/rate detail — see
+[Ubiquiti UniFi — two auth methods](#ubiquiti-unifi--two-auth-methods).
 
 **AI Assistant says it's not configured** — set an Anthropic API key at
 Settings -> Security -> AI Assistant; see [AI Assistant](#ai-assistant).
