@@ -125,8 +125,18 @@ class UnifiCollector(Collector):
 
         result = PollResult()
         for dev in devices:
+            # The Integration API identifies device roles via the `features`
+            # list ("accessPoint" / "switching"...), not a type field —
+            # verified against a live UDM-Pro. Fall back to type/deviceType
+            # for firmware that sends those instead, and skip anything that
+            # can't be identified as an AP rather than polluting the AP list
+            # with switches and gateways.
+            features = [str(f).lower() for f in (dev.get("features") or [])]
             device_type = str(_first(dev, "type", "deviceType", default="")).lower()
-            if device_type and "ap" not in device_type and "uap" not in device_type:
+            if features:
+                if "accesspoint" not in features:
+                    continue
+            elif not device_type or ("ap" not in device_type and "uap" not in device_type):
                 continue
             mac = _first(dev, "macAddress", "mac", default="")
             state = str(_first(dev, "state", "status", default="")).lower()

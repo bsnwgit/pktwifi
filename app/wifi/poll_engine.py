@@ -143,6 +143,18 @@ async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResu
                         "INSERT INTO client_events (mac_address, event_type, from_ap_id, to_ap_id) VALUES (?, ?, ?, ?)",
                         (client.mac_address, event_type, prev_ap_id, ap_id),
                     )
+
+    # Full-replace semantics per poll: an AP this collector stored before but
+    # didn't report this time no longer exists on the controller (renamed,
+    # removed, or — as with the pre-fix UniFi filter — was never an AP at
+    # all). Radios/metrics cascade via FK; wifi_clients rows are SET NULL.
+    seen_ids = [ap.external_id for ap in result.access_points]
+    placeholders = ",".join("?" * len(seen_ids))
+    await db.execute(
+        f"DELETE FROM access_points WHERE collector_id = ? AND external_id NOT IN ({placeholders})"
+        if seen_ids else "DELETE FROM access_points WHERE collector_id = ?",
+        (collector_id, *seen_ids),
+    )
     await db.commit()
 
 
@@ -178,6 +190,9 @@ class PollEngine:
     async def _tick(self) -> None:
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
+            # SQLite defaults foreign_keys off per-connection — without this,
+            # the stale-AP cleanup in _persist wouldn't cascade to radios.
+            await db.execute("PRAGMA foreign_keys=ON")
             async with db.execute(
                 """SELECT * FROM collectors WHERE enabled = 1 AND
                    (last_poll_at IS NULL OR
