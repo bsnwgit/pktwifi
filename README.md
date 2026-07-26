@@ -304,9 +304,20 @@ shows:
   header. Only available on a UniFi OS console (UDM/UDM-Pro/Cloud Gateway)
   with Integrations enabled under Settings -> Control Plane ->
   Integrations in the UniFi UI — no standalone-controller equivalent
-  exists. This mode is coarser: it's an intentionally limited API subset,
-  so it reports online/offline status only, with no per-radio breakdown
-  (empty radios list). Not yet verified against live UniFi OS hardware.
+  exists. **Verified against a live UDM-Pro.** AP-level detail is real:
+  online/offline, per-radio channel/width/standard (device detail
+  endpoint) and tx-retry-% (`statistics/latest`). **Per-client detail is
+  a hard API limitation, not a parsing gap** — the Integration API's
+  client payload carries only `id`/`name`/`macAddress`/`ipAddress`/
+  `connectedAt`/`uplinkDeviceId`/`type`, confirmed by inspecting the raw
+  response directly. There is no SSID, RSSI, protocol, tx/rx rate, or
+  per-radio attribution anywhere in that payload, at the list endpoint or
+  the per-client detail endpoint (they're identical). Every client from an
+  API-key-mode controller lands in a single "Unassigned / no per-radio
+  breakdown" bucket in the UI (Access Points detail panel, Clients page
+  Channel column) — that's the API telling the truth about what it knows,
+  not a bug. Switch the controller to username/password mode for full
+  per-client SSID/signal/rate/channel detail.
 
 **Site slug gotcha (username/password mode):** a UniFi controller's Site
 concept has two names — the one shown in the UniFi UI (the `desc` field)
@@ -617,10 +628,14 @@ cd frontend && npm install && npm run dev   # http://localhost:5175, proxies /ap
 - **Cisco Meraki collector is unverified against a live organization** —
   built against the documented API v1 shape; field mappings should be
   spot-checked against a real Dashboard response.
-- **UniFi API-key auth mode is unverified against live UniFi OS hardware**
-  — built against Ubiquiti's published Integration API v1 docs; the
-  username/password auth mode has been confirmed against real gear
-  (site-slug resolution, CSRF token, redirect-following).
+- **UniFi API-key auth mode reports no per-client SSID/RSSI/rate/radio
+  attribution** — verified against a live UDM-Pro that this is a real
+  limitation of Ubiquiti's Integration API itself (confirmed by inspecting
+  the raw client payload), not a parsing gap. AP-level detail (online/
+  offline, per-radio channel/width, tx-retry-%) works correctly in this
+  mode; only per-client detail is coarse. Use username/password auth mode
+  for full per-client detail — see
+  [Ubiquiti UniFi — two auth methods](#ubiquiti-unifi--two-auth-methods).
 - **No floor-plan heatmaps or spectrum-analysis integration yet.**
 - **Single SQLite storage backend for RF metric history** — pktsnmp's
   ClickHouse/DuckDB backend abstraction (`app/storage/`) was deliberately
