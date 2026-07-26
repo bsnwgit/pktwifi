@@ -80,6 +80,57 @@ def _is_ap(dev: dict) -> bool:
     return bool(device_type) and ("ap" in device_type or "uap" in device_type)
 
 
+async def _paginate(client: httpx.AsyncClient, url: str) -> list[dict]:
+    """The Integration API paginates every list endpoint (sites/devices/
+    clients) with a default page size of 25 — undocumented, discovered by
+    inspecting the response envelope's offset/limit/count/totalCount
+    fields rather than assumed. A plain unparameterized GET silently
+    truncates any list beyond 25 with no error and no obvious signal in a
+    single response — confirmed against a live UDM-Pro where /clients
+    returned only 25 of 55 real clients (missed entirely: every WIRELESS
+    client past the first page). Walks offset forward in page_limit-sized
+    steps, using the server's own reported limit/totalCount rather than a
+    hardcoded page size, until every item has been collected."""
+    resp = await client.get(url, params={"limit": 200})
+    resp.raise_for_status()
+    body = resp.json()
+    items = list(body.get("data", []))
+    total = body.get("totalCount", len(items))
+    page_limit = body.get("limit") or len(items) or 1
+    while len(items) < total:
+        resp = await client.get(url, params={"limit": page_limit, "offset": len(items)})
+        resp.raise_for_status()
+        page_items = resp.json().get("data", [])
+        if not page_items:
+            break  # defensive — avoid looping forever if totalCount is ever wrong
+        items.extend(page_items)
+    return items
+
+
+async def _resolve_https_base(client: httpx.AsyncClient, base: str, probe_path: str) -> str:
+    """If `base` is http:// and the controller 301s to https:// (nginx
+    terminating plain HTTP with a redirect — common on UniFi OS consoles),
+    resolve the real https:// origin up front via a safe GET before any
+    POST is ever issued from this base. This matters because following a
+    redirect on a POST silently downgrades it to a GET per standard
+    HTTP-client redirect semantics (matches browser behavior for 301/302,
+    not an httpx bug) — the login POST's JSON body gets dropped entirely
+    on the hop, producing a 401 the actual credentials never caused.
+    Confirmed on a live UDM-Pro: http://<ip>/api/auth/login 301s to
+    https://<ip>/api/auth/login; letting httpx auto-follow it turned the
+    login into a bodyless GET, while POSTing straight to the https URL
+    with the identical credentials succeeded immediately. GETs are safe to
+    let auto-follow since there's no body to lose."""
+    if not base.startswith("http://"):
+        return base
+    try:
+        probe = await client.get(f"{base}{probe_path}", follow_redirects=True)
+        port = f":{probe.url.port}" if probe.url.port else ""
+        return f"{probe.url.scheme}://{probe.url.host}{port}"
+    except Exception:
+        return base  # best-effort — fall back to the configured URL if the probe itself fails
+
+
 def _freq_band(freq) -> str | None:
     """Map the Integration API's frequencyGHz (2.4 / 5 / 6) to the band
     strings the rest of the app uses."""
@@ -127,12 +178,15 @@ class UnifiCollector(Collector):
 
     async def _poll_api_key(self) -> PollResult:
         headers = {"X-API-KEY": self.api_key, "Accept": "application/json"}
-        integration_base = f"{self.base}/proxy/network/integration/v1"
 
         async with httpx.AsyncClient(timeout=20, verify=self.verify_tls, headers=headers, follow_redirects=True) as client:
-            sites_resp = await client.get(f"{integration_base}/sites")
-            sites_resp.raise_for_status()
-            sites = sites_resp.json().get("data", [])
+            # Only GETs happen in this mode today, so the http->https POST
+            # downgrade bug (see _resolve_https_base) can't bite yet — but
+            # resolving up front keeps this path consistent with userpass
+            # mode and future-proofs it if a write call is ever added here.
+            self.base = await _resolve_https_base(client, self.base, "/proxy/network/integration/v1/sites")
+            integration_base = f"{self.base}/proxy/network/integration/v1"
+            sites = await _paginate(client, f"{integration_base}/sites")
             site_id = None
             for s in sites:
                 name = _first(s, "name", "desc", "description", default="")
@@ -144,13 +198,8 @@ class UnifiCollector(Collector):
             if site_id is None:
                 raise ValueError(f"No site named '{self.site}' found via the Integration API — check the Site field")
 
-            devices_resp = await client.get(f"{integration_base}/sites/{site_id}/devices")
-            devices_resp.raise_for_status()
-            devices = devices_resp.json().get("data", [])
-
-            clients_resp = await client.get(f"{integration_base}/sites/{site_id}/clients")
-            clients_resp.raise_for_status()
-            clients = clients_resp.json().get("data", [])
+            devices = await _paginate(client, f"{integration_base}/sites/{site_id}/devices")
+            clients = await _paginate(client, f"{integration_base}/sites/{site_id}/clients")
 
             # The device *list* carries no radio data, but the per-device
             # detail endpoint reports each radio's channel/width/standard and
@@ -261,6 +310,7 @@ class UnifiCollector(Collector):
 
     async def _poll_userpass(self) -> PollResult:
         async with httpx.AsyncClient(timeout=20, verify=self.verify_tls, follow_redirects=True) as client:
+            self.base = await _resolve_https_base(client, self.base, "/api/login")
             login_resp = await client.post(
                 self._login_path(), json={"username": self.username, "password": self.password}
             )

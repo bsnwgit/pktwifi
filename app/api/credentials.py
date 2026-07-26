@@ -160,9 +160,16 @@ async def test_credential(cred_id: int, body: CredentialTestRequest, user: Admin
         if cred_type == "userpass":
             if not body.target_url:
                 raise HTTPException(status_code=400, detail="Controller URL is required for a username/password test")
+            from app.wifi.collectors.unifi import _resolve_https_base
             base = body.target_url.rstrip("/")
-            login_url = f"{base}/api/auth/login" if body.udm else f"{base}/api/login"
             async with httpx.AsyncClient(timeout=15, verify=body.verify_tls, follow_redirects=True) as client:
+                # An http:// controller_url that 301s to https:// would
+                # otherwise silently downgrade this POST to a bodyless GET
+                # on the redirect hop — see _resolve_https_base's docstring;
+                # confirmed on a live UDM-Pro that this alone produces a
+                # 401 with completely correct credentials.
+                base = await _resolve_https_base(client, base, "/api/login")
+                login_url = f"{base}/api/auth/login" if body.udm else f"{base}/api/login"
                 resp = await client.post(login_url, json={
                     "username": resolved.get("username", ""), "password": resolved.get("password", ""),
                 })
