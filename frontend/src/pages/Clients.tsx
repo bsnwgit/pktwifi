@@ -97,6 +97,7 @@ export default function Clients() {
               <th className="px-4 py-2 font-medium">Client</th>
               <th className="px-4 py-2 font-medium">SSID</th>
               <th className="px-4 py-2 font-medium">Band</th>
+              <th className="px-4 py-2 font-medium">Channel</th>
               <th className="px-4 py-2 font-medium">Signal</th>
               <th className="px-4 py-2 font-medium">Rate (tx/rx)</th>
               <th className="px-4 py-2 font-medium">Connected</th>
@@ -110,6 +111,9 @@ export default function Clients() {
                 <td className="px-4 py-2 text-gray-300">{c.ssid ?? '—'}</td>
                 <td className="px-4 py-2 text-gray-300">{c.band ?? '—'}</td>
                 <td className="px-4 py-2 text-gray-300">
+                  {c.channel != null ? `ch ${c.channel}${c.channel_width_mhz ? ` @ ${c.channel_width_mhz}MHz` : ''}` : '—'}
+                </td>
+                <td className="px-4 py-2 text-gray-300">
                   {c.rssi_dbm != null ? `${c.rssi_dbm} dBm` : '—'}{c.snr_db != null ? ` (${c.snr_db.toFixed(0)} dB SNR)` : ''}
                 </td>
                 <td className="px-4 py-2 text-gray-300">
@@ -120,7 +124,7 @@ export default function Clients() {
               </tr>
             ))}
             {clients.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+              <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">
                 {search || apFilterId ? 'No clients match your filters.' : 'No clients seen yet.'}
               </td></tr>
             )}
