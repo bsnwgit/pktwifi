@@ -6,8 +6,13 @@ function toMs(ts: string): number {
   return new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z').getTime()
 }
 
-function tsShort(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+/** Include the date in tick labels once the visible span exceeds a day —
+ * otherwise "03:00 … 03:00" ticks across a 7d-wide axis are ambiguous. */
+function tickFormatterFor(spanMs: number) {
+  const showDate = spanMs > 24 * 60 * 60 * 1000
+  return (ms: number) => new Date(ms).toLocaleString([], showDate
+    ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+    : { hour: '2-digit', minute: '2-digit' })
 }
 
 /**
@@ -24,17 +29,25 @@ function tsShort(ms: number): string {
  * because the points were never positioned by real elapsed time in the
  * first place.
  */
-export default function MetricChart({ data, dataKey, label, color, unit = '' }: {
+export default function MetricChart({ data, dataKey, label, color, unit = '', range }: {
   data: MetricPoint[]
   dataKey: 'utilization_pct' | 'retry_pct' | 'client_count'
   label: string
   color: string
   unit?: string
+  // [start, end] epoch ms — the full selected time window, NOT derived from
+  // the data. Used as a fixed XAxis domain so a small amount of real data
+  // renders as a correctly-proportioned slice of the selected window (e.g.
+  // 45 minutes of history within a 7d window shows compressed near one
+  // edge with empty space around it) instead of always stretching to fill
+  // the chart regardless of how much of the window it actually covers.
+  range: [number, number]
 }) {
   const points = useMemo(
     () => data.filter(p => p[dataKey] != null).map(p => ({ ...p, tMs: toMs(p.ts) })),
     [data, dataKey],
   )
+  const tickFormatter = useMemo(() => tickFormatterFor(range[1] - range[0]), [range])
 
   if (points.length === 0) {
     return (
@@ -60,8 +73,9 @@ export default function MetricChart({ data, dataKey, label, color, unit = '' }: 
             dataKey="tMs"
             type="number"
             scale="time"
-            domain={['dataMin', 'dataMax']}
-            tickFormatter={tsShort}
+            domain={range}
+            allowDataOverflow
+            tickFormatter={tickFormatter}
             tick={{ fontSize: 10, fill: '#6b7280' }}
             minTickGap={40}
           />
