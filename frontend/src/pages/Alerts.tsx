@@ -163,7 +163,8 @@ const CONDITION_LABELS: Record<AlertConditionType, string> = {
   rogue_ap: 'Rogue access point detected',
 }
 
-const PAGE_SIZE = 25
+const PAGE_SIZE_DEFAULT = 25
+const PAGE_SIZE_OPTIONS = [25, 50, 75, 100]
 
 function Pagination({ page, totalPages, onChange }: { page: number; totalPages: number; onChange: (p: number) => void }) {
   if (totalPages <= 1) return null
@@ -338,7 +339,9 @@ export default function Alerts() {
   const [historySevFilter, setHistorySevFilter] = useState('')
   const [historyWindow, setHistoryWindow]       = useState<TimeWindow>({})
   const [eventsPage, setEventsPage]             = useState(1)
+  const [eventsPageSize, setEventsPageSize]     = useState(PAGE_SIZE_DEFAULT)
   const [historyPage, setHistoryPage]           = useState(1)
+  const [historyPageSize, setHistoryPageSize]   = useState(PAGE_SIZE_DEFAULT)
   const [rulesFilter, setRulesFilter]           = useState('')
 
   const loadEvents = useCallback(async () => {
@@ -377,22 +380,30 @@ export default function Alerts() {
     await api.deleteAlertRule(id)
     await loadRules()
   }
+  const changeEventsPageSize = (size: number) => {
+    setEventsPageSize(size)
+    setEventsPage(1)
+  }
+  const changeHistoryPageSize = (size: number) => {
+    setHistoryPageSize(size)
+    setHistoryPage(1)
+  }
 
   const filteredEvents = useMemo(() => events.filter(e =>
     (!eventsSevFilter || e.severity === eventsSevFilter) &&
     (!eventsFilter || e.message.toLowerCase().includes(eventsFilter.toLowerCase()))
   ), [events, eventsSevFilter, eventsFilter])
-  const eventsTotalPages = Math.max(1, Math.ceil(filteredEvents.length / PAGE_SIZE))
+  const eventsTotalPages = Math.max(1, Math.ceil(filteredEvents.length / eventsPageSize))
   const eventsPageClamped = Math.min(eventsPage, eventsTotalPages)
-  const pagedEvents = filteredEvents.slice((eventsPageClamped - 1) * PAGE_SIZE, eventsPageClamped * PAGE_SIZE)
+  const pagedEvents = filteredEvents.slice((eventsPageClamped - 1) * eventsPageSize, eventsPageClamped * eventsPageSize)
 
   const filteredHistory = useMemo(() => history.filter(e =>
     (!historySevFilter || e.severity === historySevFilter) &&
     (!historyFilter || e.message.toLowerCase().includes(historyFilter.toLowerCase()))
   ), [history, historySevFilter, historyFilter])
-  const historyTotalPages = Math.max(1, Math.ceil(filteredHistory.length / PAGE_SIZE))
+  const historyTotalPages = Math.max(1, Math.ceil(filteredHistory.length / historyPageSize))
   const historyPageClamped = Math.min(historyPage, historyTotalPages)
-  const pagedHistory = filteredHistory.slice((historyPageClamped - 1) * PAGE_SIZE, historyPageClamped * PAGE_SIZE)
+  const pagedHistory = filteredHistory.slice((historyPageClamped - 1) * historyPageSize, historyPageClamped * historyPageSize)
 
   const displayedRules = useMemo(() => rules.filter(r => {
     if (!rulesFilter) return true
@@ -479,11 +490,28 @@ export default function Alerts() {
           {!loading && events.length > 0 && filteredEvents.length === 0 && (
             <p className="text-sm text-white text-center py-8">No alerts match this filter</p>
           )}
-          {filteredEvents.length > 0 && <Pagination page={eventsPageClamped} totalPages={eventsTotalPages} onChange={setEventsPage} />}
+          {filteredEvents.length > 0 && (
+            <div className="flex items-center justify-center gap-6">
+              <Pagination page={eventsPageClamped} totalPages={eventsTotalPages} onChange={setEventsPage} />
+              <div className="flex items-center gap-2">
+                <label htmlFor="active-alerts-per-page" className="text-xs text-gray-400">Alerts per page:</label>
+                <select
+                  id="active-alerts-per-page"
+                  value={eventsPageSize}
+                  onChange={e => changeEventsPageSize(Number(e.target.value))}
+                  className="text-sm bg-gray-800 border border-gray-700 text-white rounded-lg px-2 py-1 focus:outline-none focus:border-sky-500"
+                >
+                  {PAGE_SIZE_OPTIONS.map(size => (
+                    <option key={size} value={size}>{size}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
           {pagedEvents.map(e => <EventCard key={e.id} event={e} onAck={handleAck} />)}
           {filteredEvents.length > 0 && (
             <div className="flex items-center justify-between text-xs text-gray-500 pt-1">
-              <span>Showing {((eventsPageClamped - 1) * PAGE_SIZE + 1).toLocaleString()}–{((eventsPageClamped - 1) * PAGE_SIZE + pagedEvents.length).toLocaleString()} of {filteredEvents.length.toLocaleString()} alerts</span>
+              <span>Showing {((eventsPageClamped - 1) * eventsPageSize + 1).toLocaleString()}–{((eventsPageClamped - 1) * eventsPageSize + pagedEvents.length).toLocaleString()} of {filteredEvents.length.toLocaleString()} alerts</span>
               <Pagination page={eventsPageClamped} totalPages={eventsTotalPages} onChange={setEventsPage} />
             </div>
           )}
@@ -520,11 +548,28 @@ export default function Alerts() {
           {history.length > 0 && filteredHistory.length === 0 && (
             <p className="text-sm text-white text-center py-8">No alerts match this filter</p>
           )}
-          {filteredHistory.length > 0 && <Pagination page={historyPageClamped} totalPages={historyTotalPages} onChange={setHistoryPage} />}
+          {filteredHistory.length > 0 && (
+            <div className="flex items-center justify-center gap-6">
+              <Pagination page={historyPageClamped} totalPages={historyTotalPages} onChange={setHistoryPage} />
+              <div className="flex items-center gap-2">
+                <label htmlFor="alert-history-per-page" className="text-xs text-gray-400">Alerts per page:</label>
+                <select
+                  id="alert-history-per-page"
+                  value={historyPageSize}
+                  onChange={e => changeHistoryPageSize(Number(e.target.value))}
+                  className="text-sm bg-gray-800 border border-gray-700 text-white rounded-lg px-2 py-1 focus:outline-none focus:border-sky-500"
+                >
+                  {PAGE_SIZE_OPTIONS.map(size => (
+                    <option key={size} value={size}>{size}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
           {pagedHistory.map(e => <EventCard key={e.id} event={e} onAck={handleAck} />)}
           {filteredHistory.length > 0 && (
             <div className="flex items-center justify-between text-xs text-gray-500 pt-1">
-              <span>Showing {((historyPageClamped - 1) * PAGE_SIZE + 1).toLocaleString()}–{((historyPageClamped - 1) * PAGE_SIZE + pagedHistory.length).toLocaleString()} of {filteredHistory.length.toLocaleString()} alerts</span>
+              <span>Showing {((historyPageClamped - 1) * historyPageSize + 1).toLocaleString()}–{((historyPageClamped - 1) * historyPageSize + pagedHistory.length).toLocaleString()} of {filteredHistory.length.toLocaleString()} alerts</span>
               <Pagination page={historyPageClamped} totalPages={historyTotalPages} onChange={setHistoryPage} />
             </div>
           )}
