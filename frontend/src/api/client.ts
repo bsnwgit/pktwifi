@@ -3,6 +3,19 @@
  * Access token is stored in memory (not localStorage).
  */
 
+// new URLSearchParams({foo: undefined}) serializes to the literal string
+// "foo=undefined" instead of omitting the key — confirmed the hard way in
+// pktIPAM (see memory: pktipam-undefined-query-param-bug). Filter first.
+function toQueryString(params?: Record<string, unknown>): string {
+  if (!params) return ''
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') q.set(k, String(v))
+  }
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
+
 let _accessToken: string | null = null
 let _tokenRole: string | null = null
 
@@ -106,10 +119,10 @@ export const api = {
 
   // -- Devices (access points) ---------------------------------------------------
   getDevicesSummary: () => request<DevicesSummary>('/devices/summary'),
-  getAccessPoints: (params?: { status?: string; site?: string }) => {
-    const q = new URLSearchParams(params as Record<string, string>)
-    return request<AccessPoint[]>(`/devices${q.toString() ? '?' + q : ''}`)
-  },
+  getAccessPoints: (params?: { status?: string; site?: string; search?: string; limit?: number; offset?: number }) =>
+    request<AccessPoint[]>(`/devices${toQueryString(params)}`),
+  countAccessPoints: (params?: { status?: string; site?: string; search?: string }) =>
+    request<{ total: number }>(`/devices/count${toQueryString(params)}`),
   getAccessPoint: (id: number) => request<AccessPoint & { radios: Radio[] }>(`/devices/${id}`),
   createAccessPoint: (body: Partial<AccessPoint>) => request<AccessPoint>('/devices', { method: 'POST', body: JSON.stringify(body) }),
   updateAccessPoint: (id: number, body: Partial<AccessPoint>) =>
@@ -117,10 +130,10 @@ export const api = {
   deleteAccessPoint: (id: number) => request(`/devices/${id}`, { method: 'DELETE' }),
 
   // -- Clients ---------------------------------------------------------------------
-  getClients: (params?: { access_point_id?: number; ssid?: string }) => {
-    const q = new URLSearchParams(params as any)
-    return request<WifiClient[]>(`/clients${q.toString() ? '?' + q : ''}`)
-  },
+  getClients: (params?: { access_point_id?: number; ssid?: string; search?: string; limit?: number; offset?: number }) =>
+    request<WifiClient[]>(`/clients${toQueryString(params)}`),
+  countClients: (params?: { access_point_id?: number; ssid?: string; search?: string }) =>
+    request<{ total: number }>(`/clients/count${toQueryString(params)}`),
   getClient: (mac: string) => request<WifiClient>(`/clients/${mac}`),
   getClientEvents: (mac: string) => request<ClientEvent[]>(`/clients/${mac}/events`),
 

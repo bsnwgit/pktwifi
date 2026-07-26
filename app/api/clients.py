@@ -34,25 +34,54 @@ def _client_out(row) -> dict:
     }
 
 
+def _list_filters(access_point_id: int | None, ssid: str | None, search: str | None) -> tuple[str, list]:
+    where = " WHERE 1=1"
+    params: list = []
+    if access_point_id is not None:
+        where += " AND access_point_id = ?"
+        params.append(access_point_id)
+    if ssid:
+        where += " AND ssid = ?"
+        params.append(ssid)
+    if search:
+        where += " AND (hostname LIKE ? OR mac_address LIKE ? OR ip_address LIKE ? OR ssid LIKE ?)"
+        like = f"%{search}%"
+        params.extend([like, like, like, like])
+    return where, params
+
+
 @router.get("")
 async def list_clients(
     user: CurrentUser,
     access_point_id: int | None = None,
     ssid: str | None = None,
+    search: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    query = "SELECT * FROM wifi_clients WHERE 1=1"
-    params: list = []
-    if access_point_id is not None:
-        query += " AND access_point_id = ?"
-        params.append(access_point_id)
-    if ssid:
-        query += " AND ssid = ?"
-        params.append(ssid)
-    query += " ORDER BY last_seen DESC"
+    where, params = _list_filters(access_point_id, ssid, search)
+    query = "SELECT * FROM wifi_clients" + where + " ORDER BY last_seen DESC"
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        params = params + [limit, offset]
     async with db.execute(query, params) as cur:
         rows = await cur.fetchall()
     return [_client_out(r) for r in rows]
+
+
+@router.get("/count")
+async def count_clients(
+    user: CurrentUser,
+    access_point_id: int | None = None,
+    ssid: str | None = None,
+    search: str | None = None,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    where, params = _list_filters(access_point_id, ssid, search)
+    async with db.execute("SELECT COUNT(*) AS total FROM wifi_clients" + where, params) as cur:
+        row = await cur.fetchone()
+    return {"total": row["total"]}
 
 
 @router.get("/{mac_address}")

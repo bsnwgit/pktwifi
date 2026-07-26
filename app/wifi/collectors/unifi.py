@@ -230,8 +230,12 @@ class UnifiCollector(Collector):
                 mac_address=_first(c, "macAddress", "mac", default=""),
                 hostname=_first(c, "name", "hostnameOrIp", "hostname"),
                 ip_address=_first(c, "ipAddress", "ip"),
-                ssid=_first(c, "ssid"),
-                rssi_dbm=_first(c, "rssi"),
+                # The Integration API's client payload has no ssid/rssi/rate
+                # fields at all (confirmed empirically — not a parsing gap,
+                # a real API-key-mode limitation; use userpass mode for full
+                # per-client RF detail). It does report a real connectedAt,
+                # so that's not lost the way the others are.
+                connected_at=_first(c, "connectedAt"),
             ))
 
         return result
