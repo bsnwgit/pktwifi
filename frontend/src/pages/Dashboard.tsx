@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, DevicesSummary, AlertEvent, AccessPoint } from '../api/client'
+import HelpButton from '../components/HelpButton'
 
 function StatTile({ label, value, accent }: { label: string; value: number | string; accent?: string }) {
   return (
@@ -32,7 +33,13 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-white">Dashboard</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="text-xl font-semibold text-white">Dashboard</h1>
+        <HelpButton title="Dashboard — How It Works">
+          <p>Stat tiles summarize all access points collected across your controllers — <span className="text-gray-300 font-medium">Online/Offline</span> reflects the latest poll, and <span className="text-gray-300 font-medium">Rogue APs</span> counts unmanaged devices the controller has detected nearby.</p>
+          <p>The lists below are shortcuts into recent Alerts and Access Points — click through for full detail and filtering.</p>
+        </HelpButton>
+      </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <StatTile label="Access Points" value={summary?.total ?? 0} />
