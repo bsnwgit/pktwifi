@@ -80,6 +80,33 @@ def _is_ap(dev: dict) -> bool:
     return bool(device_type) and ("ap" in device_type or "uap" in device_type)
 
 
+async def _paginate(client: httpx.AsyncClient, url: str) -> list[dict]:
+    """The Integration API paginates every list endpoint (sites/devices/
+    clients) with a default page size of 25 — undocumented, discovered by
+    inspecting the response envelope's offset/limit/count/totalCount
+    fields rather than assumed. A plain unparameterized GET silently
+    truncates any list beyond 25 with no error and no obvious signal in a
+    single response — confirmed against a live UDM-Pro where /clients
+    returned only 25 of 55 real clients (missed entirely: every WIRELESS
+    client past the first page). Walks offset forward in page_limit-sized
+    steps, using the server's own reported limit/totalCount rather than a
+    hardcoded page size, until every item has been collected."""
+    resp = await client.get(url, params={"limit": 200})
+    resp.raise_for_status()
+    body = resp.json()
+    items = list(body.get("data", []))
+    total = body.get("totalCount", len(items))
+    page_limit = body.get("limit") or len(items) or 1
+    while len(items) < total:
+        resp = await client.get(url, params={"limit": page_limit, "offset": len(items)})
+        resp.raise_for_status()
+        page_items = resp.json().get("data", [])
+        if not page_items:
+            break  # defensive — avoid looping forever if totalCount is ever wrong
+        items.extend(page_items)
+    return items
+
+
 def _freq_band(freq) -> str | None:
     """Map the Integration API's frequencyGHz (2.4 / 5 / 6) to the band
     strings the rest of the app uses."""
@@ -130,9 +157,7 @@ class UnifiCollector(Collector):
         integration_base = f"{self.base}/proxy/network/integration/v1"
 
         async with httpx.AsyncClient(timeout=20, verify=self.verify_tls, headers=headers, follow_redirects=True) as client:
-            sites_resp = await client.get(f"{integration_base}/sites")
-            sites_resp.raise_for_status()
-            sites = sites_resp.json().get("data", [])
+            sites = await _paginate(client, f"{integration_base}/sites")
             site_id = None
             for s in sites:
                 name = _first(s, "name", "desc", "description", default="")
@@ -144,13 +169,8 @@ class UnifiCollector(Collector):
             if site_id is None:
                 raise ValueError(f"No site named '{self.site}' found via the Integration API — check the Site field")
 
-            devices_resp = await client.get(f"{integration_base}/sites/{site_id}/devices")
-            devices_resp.raise_for_status()
-            devices = devices_resp.json().get("data", [])
-
-            clients_resp = await client.get(f"{integration_base}/sites/{site_id}/clients")
-            clients_resp.raise_for_status()
-            clients = clients_resp.json().get("data", [])
+            devices = await _paginate(client, f"{integration_base}/sites/{site_id}/devices")
+            clients = await _paginate(client, f"{integration_base}/sites/{site_id}/clients")
 
             # The device *list* carries no radio data, but the per-device
             # detail endpoint reports each radio's channel/width/standard and
