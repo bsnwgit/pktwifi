@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, AccessPoint, Radio } from '../api/client'
 import clsx from 'clsx'
+import IpLink from '../components/IpLink'
 
 function StatusDot({ status }: { status: string }) {
   const color = status === 'online' ? 'bg-green-400' : status === 'offline' ? 'bg-red-400' : 'bg-gray-500'
@@ -44,7 +45,7 @@ export default function AccessPoints() {
                 <td className="px-4 py-2"><StatusDot status={ap.status} /></td>
                 <td className="px-4 py-2 text-white">{ap.name}{ap.is_rogue && <span className="ml-2 text-xs text-amber-400">rogue</span>}</td>
                 <td className="px-4 py-2 text-gray-300">{ap.vendor ?? '—'}</td>
-                <td className="px-4 py-2 text-gray-300">{ap.ip_address ?? '—'}</td>
+                <td className="px-4 py-2 text-gray-300">{ap.ip_address ? <IpLink ip={ap.ip_address} /> : '—'}</td>
                 <td className="px-4 py-2 text-gray-300">{[ap.site, ap.floor].filter(Boolean).join(' / ') || '—'}</td>
                 <td className="px-4 py-2 text-gray-500">{ap.last_seen ?? 'never'}</td>
               </tr>

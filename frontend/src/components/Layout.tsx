@@ -175,6 +175,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 
       <AiAssistant />
       {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
+      <AiAssistant />
     </div>
   )
 }
