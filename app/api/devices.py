@@ -78,25 +78,54 @@ async def devices_summary(user: CurrentUser, db: aiosqlite.Connection = Depends(
     }
 
 
+def _list_filters(status: str | None, site: str | None, search: str | None) -> tuple[str, list]:
+    where = " WHERE 1=1"
+    params: list = []
+    if status:
+        where += " AND status = ?"
+        params.append(status)
+    if site:
+        where += " AND site = ?"
+        params.append(site)
+    if search:
+        where += " AND (name LIKE ? OR mac_address LIKE ? OR ip_address LIKE ? OR vendor LIKE ? OR model LIKE ?)"
+        like = f"%{search}%"
+        params.extend([like, like, like, like, like])
+    return where, params
+
+
 @router.get("")
 async def list_access_points(
     user: CurrentUser,
     status: str | None = None,
     site: str | None = None,
+    search: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    query = "SELECT * FROM access_points WHERE 1=1"
-    params: list = []
-    if status:
-        query += " AND status = ?"
-        params.append(status)
-    if site:
-        query += " AND site = ?"
-        params.append(site)
-    query += " ORDER BY name"
+    where, params = _list_filters(status, site, search)
+    query = "SELECT * FROM access_points" + where + " ORDER BY name"
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        params = params + [limit, offset]
     async with db.execute(query, params) as cur:
         rows = await cur.fetchall()
     return [_ap_out(r) for r in rows]
+
+
+@router.get("/count")
+async def count_access_points(
+    user: CurrentUser,
+    status: str | None = None,
+    site: str | None = None,
+    search: str | None = None,
+    db: aiosqlite.Connection = Depends(get_db),
+):
+    where, params = _list_filters(status, site, search)
+    async with db.execute("SELECT COUNT(*) AS total FROM access_points" + where, params) as cur:
+        row = await cur.fetchone()
+    return {"total": row["total"]}
 
 
 @router.get("/{ap_id}")

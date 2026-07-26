@@ -72,10 +72,9 @@ const NAV = [
   { to: '/',               label: 'Dashboard',     icon: '◑', adminOnly: false },
   { to: '/access-points',  label: 'Access Points', icon: '⬡', adminOnly: false },
   { to: '/clients',        label: 'Clients',       icon: '▤', adminOnly: false },
+  { to: '/metrics',        label: 'Metrics',       icon: '∿', adminOnly: false },
   { to: '/alerts',         label: 'Alerts',        icon: '△', adminOnly: false },
   { to: '/logs',           label: 'Logs',          icon: '≡', adminOnly: false },
-  { to: '/collectors',     label: 'Collectors',    icon: '⇅', adminOnly: true },
-  { to: '/sites',          label: 'Sites',         icon: '⚑', adminOnly: true },
   { to: '/settings',       label: 'Settings',      icon: '⚙', adminOnly: true },
 ]
 
@@ -175,6 +174,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 
       <AiAssistant />
       {showChangePw && <ChangePasswordModal onClose={() => setShowChangePw(false)} />}
+      <AiAssistant />
     </div>
   )
 }

@@ -113,7 +113,12 @@ async def poll_now(collector_id: int, user: AdminUser, db: aiosqlite.Connection 
         raise HTTPException(status_code=404, detail="Collector not found")
 
     from app.wifi.collectors.registry import get_collector_instance
-    collector = get_collector_instance(row["collector_type"], decrypt_config(row["config_json"]))
+    from app.wifi.poll_engine import resolve_credential
+    try:
+        config = await resolve_credential(db, decrypt_config(row["config_json"]))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    collector = get_collector_instance(row["collector_type"], config)
     if collector is None:
         raise HTTPException(status_code=400, detail="Collector type is not implemented yet")
     try:

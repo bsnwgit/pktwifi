@@ -3,6 +3,19 @@
  * Access token is stored in memory (not localStorage).
  */
 
+// new URLSearchParams({foo: undefined}) serializes to the literal string
+// "foo=undefined" instead of omitting the key — confirmed the hard way in
+// pktIPAM (see memory: pktipam-undefined-query-param-bug). Filter first.
+function toQueryString(params?: Record<string, unknown>): string {
+  if (!params) return ''
+  const q = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') q.set(k, String(v))
+  }
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
+
 let _accessToken: string | null = null
 let _tokenRole: string | null = null
 
@@ -106,10 +119,10 @@ export const api = {
 
   // -- Devices (access points) ---------------------------------------------------
   getDevicesSummary: () => request<DevicesSummary>('/devices/summary'),
-  getAccessPoints: (params?: { status?: string; site?: string }) => {
-    const q = new URLSearchParams(params as Record<string, string>)
-    return request<AccessPoint[]>(`/devices${q.toString() ? '?' + q : ''}`)
-  },
+  getAccessPoints: (params?: { status?: string; site?: string; search?: string; limit?: number; offset?: number }) =>
+    request<AccessPoint[]>(`/devices${toQueryString(params)}`),
+  countAccessPoints: (params?: { status?: string; site?: string; search?: string }) =>
+    request<{ total: number }>(`/devices/count${toQueryString(params)}`),
   getAccessPoint: (id: number) => request<AccessPoint & { radios: Radio[] }>(`/devices/${id}`),
   createAccessPoint: (body: Partial<AccessPoint>) => request<AccessPoint>('/devices', { method: 'POST', body: JSON.stringify(body) }),
   updateAccessPoint: (id: number, body: Partial<AccessPoint>) =>
@@ -117,10 +130,10 @@ export const api = {
   deleteAccessPoint: (id: number) => request(`/devices/${id}`, { method: 'DELETE' }),
 
   // -- Clients ---------------------------------------------------------------------
-  getClients: (params?: { access_point_id?: number; ssid?: string }) => {
-    const q = new URLSearchParams(params as any)
-    return request<WifiClient[]>(`/clients${q.toString() ? '?' + q : ''}`)
-  },
+  getClients: (params?: { access_point_id?: number; ssid?: string; search?: string; limit?: number; offset?: number }) =>
+    request<WifiClient[]>(`/clients${toQueryString(params)}`),
+  countClients: (params?: { access_point_id?: number; ssid?: string; search?: string }) =>
+    request<{ total: number }>(`/clients/count${toQueryString(params)}`),
   getClient: (mac: string) => request<WifiClient>(`/clients/${mac}`),
   getClientEvents: (mac: string) => request<ClientEvent[]>(`/clients/${mac}/events`),
 
@@ -167,6 +180,16 @@ export const api = {
     request<Collector>(`/collectors/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteCollector: (id: number) => request(`/collectors/${id}`, { method: 'DELETE' }),
   pollCollectorNow: (id: number) => request<{ status: string; access_points: number; clients: number }>(`/collectors/${id}/poll-now`, { method: 'POST' }),
+
+  // -- Credentials (Settings -> Credentials library) -----------------------------------
+  getCredentials: () => request<WifiCredential[]>('/credentials'),
+  createCredential: (body: WifiCredentialInput) =>
+    request<WifiCredential>('/credentials', { method: 'POST', body: JSON.stringify(body) }),
+  updateCredential: (id: number, body: WifiCredentialInput) =>
+    request<WifiCredential>(`/credentials/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+  deleteCredential: (id: number) => request(`/credentials/${id}`, { method: 'DELETE' }),
+  testCredential: (id: number, body: CredentialTestInput) =>
+    request<{ ok: boolean; detail: string }>(`/credentials/${id}/test`, { method: 'POST', body: JSON.stringify(body) }),
 
   // -- Sites ---------------------------------------------------------------------
   getSites: () => request<Site[]>('/sites'),
@@ -242,19 +265,24 @@ export const api = {
     return res.json()
   },
 
-  // ── User API Keys ────────────────────────────────────────────────────────
+  // ── User API Keys / IP Info ─────────────────────────────────────────────
   getUserApiKeys: () => request<UserApiKey[]>('/user-api-keys'),
   setUserApiKey: (provider: string, api_key: string) =>
     request<UserApiKey>(`/user-api-keys/${provider}`, { method: 'PUT', body: JSON.stringify({ api_key }) }),
   testUserApiKey: (provider: string, api_key: string) =>
     request<{ status: string; detail: string }>(`/user-api-keys/${provider}/test`, { method: 'POST', body: JSON.stringify({ api_key }) }),
-}
-
-export interface UserApiKey {
-  provider: string
-  label: string
-  api_key: string
-  updated_at: string | null
+  setIpinfoFields: (enabled_fields: string[]) =>
+    request<UserApiKey>('/user-api-keys/ipinfo/fields', { method: 'PUT', body: JSON.stringify({ enabled_fields }) }),
+  setIpapiIsFields: (enabled_fields: string[]) =>
+    request<UserApiKey>('/user-api-keys/ipapi_is/fields', { method: 'PUT', body: JSON.stringify({ enabled_fields }) }),
+  setIpapiIsFreeTier: (free_tier: boolean) =>
+    request<UserApiKey>('/user-api-keys/ipapi_is/free-tier', { method: 'PUT', body: JSON.stringify({ free_tier }) }),
+  setMxtoolboxFields: (enabled_fields: string[]) =>
+    request<UserApiKey>('/user-api-keys/mxtoolbox/fields', { method: 'PUT', body: JSON.stringify({ enabled_fields }) }),
+  setProviderEnabled: (provider: string, enabled: boolean) =>
+    request<UserApiKey>(`/user-api-keys/${provider}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  getIpInfo: (ip: string) => request<IpInfoResult>(`/ip-info/${ip}`),
+  getInternalIpInfo: (ip: string) => request<InternalIpInfoResult>(`/ip-info/internal/${ip}`),
 }
 
 export interface SslStatus {
@@ -275,6 +303,47 @@ export interface UserIn {
   email: string
   password?: string
   role: string
+}
+
+export interface UserApiKey {
+  provider: string
+  label: string
+  api_key: string
+  updated_at: string | null
+  enabled_fields: string[] | null // ipinfo/ipapi_is/mxtoolbox only; null = not customized (all shown)
+  free_tier: boolean // ipapi_is only — use its keyless free tier instead of api_key
+  enabled: boolean // ipinfo/ipapi_is/abuseipdb/mxtoolbox only — show this provider's section in the IP Lookup modal at all
+}
+
+export interface IpInfoResult {
+  ip: string
+  ipinfo: Record<string, any> | null
+  ipinfo_error: string | null
+  ipinfo_enabled_fields: string[] | null
+  ipinfo_enabled: boolean
+  ipapi_is: Record<string, any> | null
+  ipapi_is_error: string | null
+  ipapi_is_enabled_fields: string[] | null
+  ipapi_is_enabled: boolean
+  abuseipdb: Record<string, any> | null
+  abuseipdb_error: string | null
+  abuseipdb_enabled: boolean
+  mxtoolbox: Record<string, any> | null
+  mxtoolbox_error: string | null
+  mxtoolbox_enabled_fields: string[] | null
+  mxtoolbox_enabled: boolean
+}
+
+export interface InternalIpInfoResult {
+  ip: string
+  configured: boolean
+  found: boolean
+  error: string | null
+  subnet: { cidr: string; vlan_id: number | null; site: string | null; description: string | null; gateway: string | null } | null
+  ip_address: { status: string; mac_address: string | null; hostname: string | null; description: string | null; owner: string | null; tags: string[] } | null
+  dhcp_leases: { mac_address: string | null; hostname: string | null; state: string; starts_at: string | null; ends_at: string | null; last_seen: string }[]
+  dns_records: { zone: string; name: string; record_type: string; ttl: number | null; last_seen: string }[]
+  arp_entries: { device_label: string | null; mac_address: string | null; interface: string | null; vlan_tag: number | null; last_seen: string }[]
 }
 
 export interface User {
@@ -437,7 +506,7 @@ export type LogQueryParams = {
   offset?: string
 }
 
-export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'select' | 'multiselect' | 'string_list' | 'host_list' | 'site_select'
+export type FieldType = 'text' | 'password' | 'number' | 'toggle' | 'select' | 'multiselect' | 'string_list' | 'host_list' | 'site_select' | 'credential_select'
 
 export interface FieldOption {
   value: string
@@ -461,6 +530,49 @@ export interface FieldSchema {
   sub_fields?: FieldSchema[]     // host_list — columns per row
   item_placeholder?: string      // string_list
   show_if?: FieldShowIf          // only render when another field in the same form equals a value
+  cred_types?: string[]          // credential_select — which credential types the dropdown offers
+}
+
+export type CredType = 'userpass' | 'api_key' | 'snmp_v2c' | 'snmp_v3'
+
+export interface WifiCredential {
+  id: number
+  name: string
+  description: string
+  cred_type: CredType
+  username: string | null
+  auth_protocol: string | null
+  priv_protocol: string | null
+  has_password: boolean
+  has_api_key: boolean
+  has_community: boolean
+  has_auth_password: boolean
+  has_priv_password: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CredentialTestInput {
+  target_url?: string
+  vendor?: 'unifi' | 'meraki'
+  udm?: boolean
+  verify_tls?: boolean
+  host?: string
+  port?: number
+}
+
+export interface WifiCredentialInput {
+  name: string
+  description?: string
+  cred_type: CredType
+  username?: string | null
+  password?: string | null
+  api_key?: string | null
+  community?: string | null
+  auth_protocol?: string | null
+  auth_password?: string | null
+  priv_protocol?: string | null
+  priv_password?: string | null
 }
 
 export interface Site {

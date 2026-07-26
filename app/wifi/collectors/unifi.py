@@ -67,6 +67,35 @@ def _first(d: dict, *keys: str, default=None):
     return default
 
 
+def _is_ap(dev: dict) -> bool:
+    """The Integration API identifies device roles via the `features` list
+    ("accessPoint" / "switching"...), not a type field — verified against a
+    live UDM-Pro. Fall back to type/deviceType for firmware that sends those
+    instead, and treat anything unidentifiable as not-an-AP rather than
+    polluting the AP list with switches and gateways."""
+    features = [str(f).lower() for f in (dev.get("features") or [])]
+    if features:
+        return "accesspoint" in features
+    device_type = str(_first(dev, "type", "deviceType", default="")).lower()
+    return bool(device_type) and ("ap" in device_type or "uap" in device_type)
+
+
+def _freq_band(freq) -> str | None:
+    """Map the Integration API's frequencyGHz (2.4 / 5 / 6) to the band
+    strings the rest of the app uses."""
+    try:
+        f = float(freq)
+    except (TypeError, ValueError):
+        return None
+    if 2 <= f < 3:
+        return "2.4GHz"
+    if 5 <= f < 6:
+        return "5GHz"
+    if 6 <= f < 8:
+        return "6GHz"
+    return None
+
+
 class UnifiCollector(Collector):
     def __init__(self, config: dict):
         super().__init__(config)
@@ -123,15 +152,37 @@ class UnifiCollector(Collector):
             clients_resp.raise_for_status()
             clients = clients_resp.json().get("data", [])
 
+            # The device *list* carries no radio data, but the per-device
+            # detail endpoint reports each radio's channel/width/standard and
+            # statistics/latest adds uptime + per-radio tx retry % — verified
+            # against a live UDM-Pro. Both are best-effort: an AP still
+            # reports (with no radio rows) if either extra call fails.
+            ap_devices = [d for d in devices if _is_ap(d)]
+            radio_detail: dict[str, list[dict]] = {}
+            device_stats: dict[str, dict] = {}
+            for dev in ap_devices:
+                dev_id = str(_first(dev, "id", "_id", default=""))
+                try:
+                    dr = await client.get(f"{integration_base}/sites/{site_id}/devices/{dev_id}")
+                    dr.raise_for_status()
+                    radio_detail[dev_id] = (dr.json().get("interfaces") or {}).get("radios") or []
+                except Exception:
+                    radio_detail[dev_id] = []
+                try:
+                    sr = await client.get(f"{integration_base}/sites/{site_id}/devices/{dev_id}/statistics/latest")
+                    sr.raise_for_status()
+                    device_stats[dev_id] = sr.json() or {}
+                except Exception:
+                    device_stats[dev_id] = {}
+
         result = PollResult()
-        for dev in devices:
-            device_type = str(_first(dev, "type", "deviceType", default="")).lower()
-            if device_type and "ap" not in device_type and "uap" not in device_type:
-                continue
+        for dev in ap_devices:
             mac = _first(dev, "macAddress", "mac", default="")
             state = str(_first(dev, "state", "status", default="")).lower()
-            result.access_points.append(AccessPointReading(
-                external_id=str(_first(dev, "id", "_id", default=mac)),
+            dev_id = str(_first(dev, "id", "_id", default=mac))
+            stats = device_stats.get(dev_id, {})
+            ap = AccessPointReading(
+                external_id=dev_id,
                 name=_first(dev, "name", default=mac),
                 mac_address=mac,
                 ip_address=_first(dev, "ipAddress", "ip"),
@@ -139,29 +190,53 @@ class UnifiCollector(Collector):
                 model=_first(dev, "model"),
                 firmware_version=_first(dev, "firmwareVersion", "version"),
                 status="online" if state in ("online", "connected", "1") else "offline",
-                uptime_seconds=_first(dev, "uptimeSeconds", "uptime"),
-            ))
+                uptime_seconds=stats.get("uptimeSec") or _first(dev, "uptimeSeconds", "uptime"),
+            )
+            retries_by_band: dict[str, float] = {}
+            for r in ((stats.get("interfaces") or {}).get("radios") or []):
+                band = _freq_band(r.get("frequencyGHz"))
+                if band and r.get("txRetriesPct") is not None:
+                    retries_by_band[band] = r["txRetriesPct"]
+            for r in radio_detail.get(dev_id, []):
+                band = _freq_band(r.get("frequencyGHz"))
+                if not band:
+                    continue
+                ap.radios.append(RadioReading(
+                    band=band,
+                    channel=r.get("channel"),
+                    channel_width_mhz=r.get("channelWidthMHz"),
+                    retry_pct=retries_by_band.get(band),
+                ))
+            result.access_points.append(ap)
 
-        ap_ids = {str(_first(dev, "id", "_id", default="")) for dev in devices}
+        ap_by_id = {ap.external_id: ap for ap in result.access_points}
         for c in clients:
-            uplink_id = str(_first(c, "uplinkDeviceId", "apId", "ap_id", default=""))
-            if uplink_id not in ap_ids:
+            # The clients list includes wired devices too — only WIRELESS
+            # entries uplinked to an AP belong here.
+            ctype = str(c.get("type", "")).upper()
+            if ctype and ctype != "WIRELESS":
                 continue
-            # api_key mode reports clients per-AP but not per-radio (see
-            # module docstring) — attach directly to a synthetic radio-less
-            # bucket so the AP still shows a client count.
-            for ap in result.access_points:
-                if ap.external_id == uplink_id:
-                    if not ap.radios:
-                        ap.radios.append(RadioReading(band="unknown"))
-                    ap.radios[0].clients.append(ClientReading(
-                        mac_address=_first(c, "macAddress", "mac", default=""),
-                        hostname=_first(c, "name", "hostnameOrIp", "hostname"),
-                        ip_address=_first(c, "ipAddress", "ip"),
-                        ssid=_first(c, "ssid"),
-                        rssi_dbm=_first(c, "rssi"),
-                    ))
-                    break
+            ap = ap_by_id.get(str(_first(c, "uplinkDeviceId", "apId", "ap_id", default="")))
+            if ap is None:
+                continue
+            # api_key mode doesn't attribute clients to a radio — keep them in
+            # a dedicated "unknown"-band bucket next to the real radios so
+            # per-radio channel data and the client list can coexist.
+            bucket = next((r for r in ap.radios if r.band == "unknown"), None)
+            if bucket is None:
+                bucket = RadioReading(band="unknown")
+                ap.radios.append(bucket)
+            bucket.clients.append(ClientReading(
+                mac_address=_first(c, "macAddress", "mac", default=""),
+                hostname=_first(c, "name", "hostnameOrIp", "hostname"),
+                ip_address=_first(c, "ipAddress", "ip"),
+                # The Integration API's client payload has no ssid/rssi/rate
+                # fields at all (confirmed empirically — not a parsing gap,
+                # a real API-key-mode limitation; use userpass mode for full
+                # per-client RF detail). It does report a real connectedAt,
+                # so that's not lost the way the others are.
+                connected_at=_first(c, "connectedAt"),
+            ))
 
         return result
 
