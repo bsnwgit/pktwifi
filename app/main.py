@@ -27,6 +27,7 @@ from app.api import (
     alerts as alerts_router,
     logs as logs_router,
     collectors as collectors_router,
+    credentials as credentials_router,
     integrations as integrations_router,
     suite as suite_router,
     user_api_keys as user_api_keys_router,
@@ -126,6 +127,7 @@ app.include_router(metrics_router.router,   prefix="/api/metrics",      tags=["m
 app.include_router(alerts_router.router,    prefix="/api/alerts",       tags=["alerts"])
 app.include_router(logs_router.router,      prefix="/api/logs",         tags=["logs"])
 app.include_router(collectors_router.router, prefix="/api/collectors", tags=["collectors"])
+app.include_router(credentials_router.router, prefix="/api/credentials", tags=["credentials"])
 app.include_router(sites_router.router,      prefix="/api/sites",        tags=["sites"])
 app.include_router(integrations_router.router, prefix="/api/integrations", tags=["integrations"])
 app.include_router(settings_router.router,  prefix="/api/settings",     tags=["settings"])
