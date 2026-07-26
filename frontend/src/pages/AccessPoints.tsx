@@ -13,6 +13,47 @@ function StatusDot({ status }: { status: string }) {
   return <span className={clsx('inline-block w-2 h-2 rounded-full', color)} />
 }
 
+function ClientRow({ c, onClick }: { c: WifiClient; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title="View this AP's clients in the Clients page"
+      className="w-full text-left bg-gray-800/40 hover:bg-gray-800 rounded-lg px-3 py-1.5 text-sm flex items-center justify-between transition-colors"
+    >
+      <span className="text-white truncate">{c.hostname || c.mac_address}</span>
+      <span className="text-xs text-gray-400 flex items-center gap-2 shrink-0 ml-2">
+        {c.ssid && <span>{c.ssid}</span>}
+        {c.rssi_dbm != null && <span>{c.rssi_dbm} dBm</span>}
+        <span>→</span>
+      </span>
+    </button>
+  )
+}
+
+/**
+ * Groups clients by the radio they're actually attached to, so each channel
+ * gets its own list instead of one flat AP-wide list. Clients with no
+ * radio_id (a collector that never attributes a client to any radio) fall
+ * into a separate "Unassigned" bucket rather than being silently dropped.
+ */
+function groupClientsByRadio(clients: WifiClient[], radios: Radio[]) {
+  const byRadio = new Map<number, WifiClient[]>()
+  const unassigned: WifiClient[] = []
+  for (const c of clients) {
+    if (c.radio_id != null) {
+      const list = byRadio.get(c.radio_id) ?? []
+      list.push(c)
+      byRadio.set(c.radio_id, list)
+    } else {
+      unassigned.push(c)
+    }
+  }
+  const groups = radios
+    .map(radio => ({ radio, clients: byRadio.get(radio.id) ?? [] }))
+    .filter(g => g.clients.length > 0)
+  return { groups, unassigned }
+}
+
 export default function AccessPoints() {
   const navigate = useNavigate()
 
@@ -76,7 +117,7 @@ export default function AccessPoints() {
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-semibold text-white">Access Points</h1>
             <HelpButton title="Access Points — How It Works">
-              <p>Click a row to open <span className="text-gray-300 font-medium">radio detail and connected clients</span> for that AP.</p>
+              <p>Click a row to open <span className="text-gray-300 font-medium">radio detail and connected clients</span> for that AP — clients are grouped by the actual channel they're attached to, where the controller reports it.</p>
               <p>Clicking any client in the detail panel jumps to the Clients page filtered to that AP. <span className="text-gray-300 font-medium">View Metrics →</span> opens the Metrics page pre-selected to this AP.</p>
             </HelpButton>
           </div>
@@ -199,25 +240,36 @@ export default function AccessPoints() {
                 <div className="h-16 flex items-center justify-center text-xs text-gray-500">Loading…</div>
               ) : selClients.length === 0 ? (
                 <p className="text-xs text-gray-500">No clients currently attached.</p>
-              ) : (
-                <div className="space-y-1">
-                  {selClients.map(c => (
-                    <button
-                      key={c.id}
-                      onClick={goToClients}
-                      title="View this AP's clients in the Clients page"
-                      className="w-full text-left bg-gray-800/40 hover:bg-gray-800 rounded-lg px-3 py-1.5 text-sm flex items-center justify-between transition-colors"
-                    >
-                      <span className="text-white truncate">{c.hostname || c.mac_address}</span>
-                      <span className="text-xs text-gray-400 flex items-center gap-2 shrink-0 ml-2">
-                        {c.ssid && <span>{c.ssid}</span>}
-                        {c.rssi_dbm != null && <span>{c.rssi_dbm} dBm</span>}
-                        <span>→</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
+              ) : (() => {
+                const { groups, unassigned } = groupClientsByRadio(selClients, selected.radios)
+                return (
+                  <div className="space-y-4">
+                    {groups.map(({ radio, clients }) => (
+                      <div key={radio.id}>
+                        <p className="text-xs text-gray-400 mb-1.5">
+                          {radio.band === 'unknown'
+                            ? 'No per-radio breakdown reported'
+                            : `${radio.band} · ch ${radio.channel ?? '—'}`}
+                          <span className="text-gray-600"> ({clients.length})</span>
+                        </p>
+                        <div className="space-y-1">
+                          {clients.map(c => <ClientRow key={c.id} c={c} onClick={goToClients} />)}
+                        </div>
+                      </div>
+                    ))}
+                    {unassigned.length > 0 && (
+                      <div>
+                        <p className="text-xs text-gray-400 mb-1.5">
+                          Unassigned<span className="text-gray-600"> ({unassigned.length})</span>
+                        </p>
+                        <div className="space-y-1">
+                          {unassigned.map(c => <ClientRow key={c.id} c={c} onClick={goToClients} />)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
 
             <button onClick={() => setSelected(null)} className="mt-5 text-sm text-sky-400 hover:text-sky-300">Close</button>

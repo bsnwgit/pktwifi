@@ -408,6 +408,8 @@ export interface WifiClient {
   ip_address: string | null
   ssid: string | null
   band: string | null
+  channel: number | null
+  channel_width_mhz: number | null
   protocol: string | null
   rssi_dbm: number | null
   snr_db: number | null
