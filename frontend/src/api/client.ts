@@ -175,6 +175,8 @@ export const api = {
   updateCredential: (id: number, body: WifiCredentialInput) =>
     request<WifiCredential>(`/credentials/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
   deleteCredential: (id: number) => request(`/credentials/${id}`, { method: 'DELETE' }),
+  testCredential: (id: number, body: CredentialTestInput) =>
+    request<{ ok: boolean; detail: string }>(`/credentials/${id}/test`, { method: 'POST', body: JSON.stringify(body) }),
 
   // -- Sites ---------------------------------------------------------------------
   getSites: () => request<Site[]>('/sites'),
@@ -535,6 +537,15 @@ export interface WifiCredential {
   has_priv_password: boolean
   created_at: string
   updated_at: string
+}
+
+export interface CredentialTestInput {
+  target_url?: string
+  vendor?: 'unifi' | 'meraki'
+  udm?: boolean
+  verify_tls?: boolean
+  host?: string
+  port?: number
 }
 
 export interface WifiCredentialInput {

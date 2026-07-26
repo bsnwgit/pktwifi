@@ -10,7 +10,10 @@ stored value (same write-only convention as pktsnmp's SNMP credentials).
 """
 from __future__ import annotations
 
+import asyncio
+
 import aiosqlite
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -121,6 +124,93 @@ async def update_credential(cred_id: int, body: CredentialRequest, user: AdminUs
     async with db.execute("SELECT * FROM credentials WHERE id = ?", (cred_id,)) as cur:
         row = await cur.fetchone()
     return _out(row)
+
+
+class CredentialTestRequest(BaseModel):
+    """Target for a live auth test — a credential alone has nothing to
+    authenticate against, so the Test modal collects the minimal target per
+    credential type (controller URL, vendor, or SNMP host)."""
+    target_url: str | None = None   # userpass / api_key+unifi: controller URL
+    vendor: str | None = None       # api_key: 'unifi' | 'meraki'
+    udm: bool = False               # userpass: UniFi OS console (UDM/Cloud Gateway)
+    verify_tls: bool = False
+    host: str | None = None         # snmp_v2c/v3: device IP
+    port: int = 161
+
+
+def _exc_detail(exc: Exception) -> str:
+    # Same convention as poll_now: some httpx exceptions have an empty str().
+    return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+
+
+@router.post("/{cred_id}/test")
+async def test_credential(cred_id: int, body: CredentialTestRequest, user: AdminUser,
+                          db: aiosqlite.Connection = Depends(get_db)):
+    """Attempt a real authentication with the stored (decrypted) secret against
+    the caller-supplied target. Auth-only — nothing is persisted."""
+    from app.wifi.poll_engine import resolve_credential
+    async with db.execute("SELECT cred_type FROM credentials WHERE id = ?", (cred_id,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    cred_type = row["cred_type"]
+    resolved = await resolve_credential(db, {"credential_id": cred_id})
+
+    try:
+        if cred_type == "userpass":
+            if not body.target_url:
+                raise HTTPException(status_code=400, detail="Controller URL is required for a username/password test")
+            base = body.target_url.rstrip("/")
+            login_url = f"{base}/api/auth/login" if body.udm else f"{base}/api/login"
+            async with httpx.AsyncClient(timeout=15, verify=body.verify_tls, follow_redirects=True) as client:
+                resp = await client.post(login_url, json={
+                    "username": resolved.get("username", ""), "password": resolved.get("password", ""),
+                })
+                if resp.status_code in (400, 401, 403):
+                    raise ValueError(f"Authentication rejected (HTTP {resp.status_code}) — check username/password"
+                                     + ("" if body.udm else "; if this is a UniFi OS console, enable the UDM toggle"))
+                resp.raise_for_status()
+            return {"ok": True, "detail": f"Authenticated to {base} as '{resolved.get('username')}'"}
+
+        if cred_type == "api_key":
+            if body.vendor == "meraki":
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get("https://api.meraki.com/api/v1/organizations",
+                                            headers={"X-Cisco-Meraki-API-Key": resolved.get("api_key", "")})
+                    if resp.status_code in (401, 403):
+                        raise ValueError(f"API key rejected by Meraki Dashboard (HTTP {resp.status_code})")
+                    resp.raise_for_status()
+                    orgs = resp.json()
+                return {"ok": True, "detail": f"Meraki Dashboard OK — {len(orgs)} organization(s) visible"}
+            # default: UniFi Network Integration API
+            if not body.target_url:
+                raise HTTPException(status_code=400, detail="Console URL is required for a UniFi API-key test")
+            base = body.target_url.rstrip("/")
+            async with httpx.AsyncClient(timeout=15, verify=body.verify_tls, follow_redirects=True) as client:
+                resp = await client.get(f"{base}/proxy/network/integration/v1/sites",
+                                        headers={"X-API-KEY": resolved.get("api_key", ""), "Accept": "application/json"})
+                if resp.status_code in (401, 403):
+                    raise ValueError(f"API key rejected (HTTP {resp.status_code}) — check the key and that the "
+                                     "Integration API is enabled under Settings -> Control Plane -> Integrations")
+                resp.raise_for_status()
+                sites = resp.json().get("data", [])
+            return {"ok": True, "detail": f"UniFi Integration API OK — {len(sites)} site(s) visible"}
+
+        # snmp_v2c / snmp_v3 — one sysDescr/sysUpTime GET via the generic collector's
+        # own poll helper, so the test exercises exactly the code path a poll uses.
+        if not body.host:
+            raise HTTPException(status_code=400, detail="Host IP is required for an SNMP test")
+        from app.wifi.collectors.snmp_generic import _poll_host_sync
+        creds = dict(resolved)
+        creds["port"] = body.port
+        ap = await asyncio.to_thread(_poll_host_sync, {"ip": body.host}, creds)
+        if ap.status != "online":
+            raise ValueError("Device did not respond to SNMP — check host/port/credentials")
+        return {"ok": True, "detail": f"SNMP {creds.get('version')} OK — {ap.model or 'device responded'}"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Test failed: {_exc_detail(exc)}")
 
 
 @router.delete("/{cred_id}", status_code=204)
