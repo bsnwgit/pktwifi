@@ -9,7 +9,6 @@ const AccessPoints  = lazy(() => import('./pages/AccessPoints'))
 const Clients       = lazy(() => import('./pages/Clients'))
 const Alerts        = lazy(() => import('./pages/Alerts'))
 const Logs          = lazy(() => import('./pages/Logs'))
-const Sites         = lazy(() => import('./pages/Sites'))
 const Settings      = lazy(() => import('./pages/Settings'))
 
 function PageFallback() {
@@ -62,11 +61,7 @@ export default function App() {
               <Suspense fallback={<PageFallback />}><Logs /></Suspense>
             </ProtectedRoute>
           } />
-          <Route path="/sites" element={
-            <AdminRoute>
-              <Suspense fallback={<PageFallback />}><Sites /></Suspense>
-            </AdminRoute>
-          } />
+          <Route path="/sites" element={<Navigate to="/settings?tab=sites" replace />} />
           <Route path="/integrations" element={<Navigate to="/settings" replace />} />
           <Route path="/settings" element={
             <AdminRoute>
