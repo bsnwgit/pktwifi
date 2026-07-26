@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import {
   api, User, UserIn, Integration, IntegrationInput, SslStatus, UserApiKey,
   Collector, CollectorType, FieldSchema, Site, WifiCredential, WifiCredentialInput, CredType,
+  CredentialTestInput,
 } from '../api/client'
 import { useAuth } from '../store/auth'
 import HelpButton from '../components/HelpButton'
@@ -1176,7 +1177,46 @@ function ControllerModal({ controller, types, sites, credentials, onClose, onSav
     }
   }
 
-  const setField = (key: string, v: unknown) => setConfig(c => ({ ...c, [key]: v }))
+  const setField = (key: string, v: unknown) => { setTestResult(null); setConfig(c => ({ ...c, [key]: v })) }
+
+  // -- Test credentials against the controller being configured -----------------
+  // The form already holds the target (controller URL / SNMP host), so the test
+  // exercises the selected library credential against exactly this controller.
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ ok: boolean; detail: string } | null>(null)
+
+  const credTestBody = (): CredentialTestInput | null => {
+    switch (collectorType) {
+      case 'unifi':
+        return config.auth_method === 'api_key'
+          ? { vendor: 'unifi', target_url: (config.controller_url as string) ?? '', verify_tls: !!config.verify_tls }
+          : { target_url: (config.controller_url as string) ?? '', udm: !!config.udm, verify_tls: !!config.verify_tls }
+      case 'cisco_meraki':
+        return { vendor: 'meraki' }
+      case 'snmp_generic': {
+        const first = (config.hosts as Array<Record<string, string>> | undefined)?.[0]
+        return { host: first?.ip ?? '', port: (config.port as number) ?? 161 }
+      }
+      default:
+        return null
+    }
+  }
+
+  const canTest = !!config.credential_id && credTestBody() !== null
+
+  const runTest = async () => {
+    const body = credTestBody()
+    if (!body || !config.credential_id) return
+    setTesting(true)
+    setTestResult(null)
+    try {
+      setTestResult(await api.testCredential(Number(config.credential_id), body))
+    } catch (e: any) {
+      setTestResult({ ok: false, detail: e.message ?? 'Test failed' })
+    } finally {
+      setTesting(false)
+    }
+  }
 
   const openJsonView = () => {
     setJsonText(JSON.stringify(config, null, 2))
@@ -1257,6 +1297,24 @@ function ControllerModal({ controller, types, sites, credentials, onClose, onSav
                 </div>
               ) : (
                 <CollectorConfigForm fields={selectedType.fields} value={config} onChange={setField} sites={sites} credentials={credentials} />
+              )}
+            </div>
+          )}
+
+          {canTest && !showJson && (
+            <div className="space-y-2">
+              <button type="button" onClick={runTest} disabled={testing}
+                className="text-xs text-sky-400 hover:text-sky-300 border border-gray-700 rounded-lg px-3 py-1.5 hover:bg-gray-800 transition-colors disabled:opacity-50">
+                {testing ? 'Testing…' : '⚡ Test Credentials'}
+              </button>
+              {testResult && (
+                testResult.ok ? (
+                  <p className="text-xs text-emerald-400">✓ {testResult.detail}</p>
+                ) : (
+                  <div className="bg-red-900/20 border border-red-700/40 rounded-lg px-3 py-2">
+                    <p className="text-xs text-red-400 font-mono whitespace-pre-wrap break-all">{testResult.detail}</p>
+                  </div>
+                )
               )}
             </div>
           )}
