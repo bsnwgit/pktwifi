@@ -29,6 +29,7 @@ assistant.
 - [Running & Managing the Service](#running--managing-the-service)
 - [Settings](#settings)
 - [Roles & Auth](#roles--auth)
+- [IP Intelligence Lookup](#ip-intelligence-lookup)
 - [Alerting & Notifications](#alerting--notifications)
 - [AI Assistant](#ai-assistant)
 - [Suite Integration](#suite-integration)
@@ -443,6 +444,23 @@ step. When pktHub proxies a request with a valid `X-Suite-Token`, the
 If every auth method (local + SAML) ends up disabled, the app doesn't lock
 everyone out — it skips the login page and auto-signs everyone in as the
 **default admin** account (see Users tab, above).
+
+---
+
+## IP Intelligence Lookup
+
+Any public IP address rendered in the app is a clickable link (`GET /api/ip-info/{ip}`) that opens a lookup combining:
+
+- **ipinfo.io** — geolocation/ASN/org info, plus company, privacy (VPN/proxy/Tor/relay/hosting), and abuse contact on paid plans
+- **ipapi.is** — geolocation, ASN/org, company, abuse contact, VPN/proxy/Tor/datacenter/abuser detection, all in one call, no plan gating
+- **AbuseIPDB** — abuse confidence score and report history
+- **MXToolbox** — reverse DNS (PTR), ASN, and a blacklist/RBL check
+
+All four are called concurrently. Private/loopback/link-local/reserved/multicast addresses are rejected — external providers have nothing useful to say about them.
+
+Keys are **per-user**, not app-wide: each logged-in user stores their own under Settings -> User Keys (`app/api/user_api_keys.py`), and lookups run under that user's own key/quota — no shared/admin key, no cross-user visibility. A fifth provider slot, IPQualityScore, can be saved and tested there but isn't consumed by the lookup yet.
+
+MXToolbox's other commands — email/DNS record checks (SPF, DMARC, DKIM, MX, DNS, TXT, SOA, BIMI, MTA-STS, TLSRPT, A, AAAA) and active probes (ping, traceroute, TCP/HTTP/HTTPS/SMTP connect, run from MXToolbox's own infrastructure against the target) — are reachable via `POST /api/mxtoolbox/lookup` (`{command, argument, port?}`, `app/api/mxtoolbox.py`) but aren't surfaced in the UI yet.
 
 ---
 

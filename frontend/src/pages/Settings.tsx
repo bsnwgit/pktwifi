@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, User, UserIn, Integration, IntegrationInput, SslStatus, UserApiKey } from '../api/client'
 import { useAuth } from '../store/auth'
 import HelpButton from '../components/HelpButton'
@@ -1155,9 +1156,26 @@ const DATA_TABS: Array<{ id: DataTabId; label: string }> = [
 export default function Settings() {
   const { user: me } = useAuth()
   const isAdmin = me?.role === 'admin'
-  const [tab, setTab] = useState<TabId>('general')
-  const [securityTab, setSecurityTab] = useState<SecurityTabId>(isAdmin ? 'users' : 'auth')
-  const [dataTab, setDataTab] = useState<DataTabId>('storage')
+  // Deep-link support: /settings?tab=<id>. Accepts the current top-level tab
+  // ids plus legacy pre-reorg ids (integrations/auth/users/ai/backup) so older
+  // links keep working — IpLink still navigates to ?tab=integrations for the
+  // Suite Integration pane, which now lives under Security.
+  const [searchParams] = useSearchParams()
+  const deepLink = ((): { tab: TabId; security?: SecurityTabId; data?: DataTabId } => {
+    switch (searchParams.get('tab')) {
+      case 'security': case 'data': case 'notifications': case 'apikeys': case 'system':
+        return { tab: searchParams.get('tab') as TabId }
+      case 'integrations': return { tab: 'security', security: 'suite' }
+      case 'auth':         return { tab: 'security', security: 'auth' }
+      case 'users':        return { tab: 'security', security: 'users' }
+      case 'ai':           return { tab: 'security', security: 'ai' }
+      case 'backup':       return { tab: 'data', data: 'backups' }
+      default:             return { tab: 'general' }
+    }
+  })()
+  const [tab, setTab] = useState<TabId>(deepLink.tab)
+  const [securityTab, setSecurityTab] = useState<SecurityTabId>(deepLink.security ?? (isAdmin ? 'users' : 'auth'))
+  const [dataTab, setDataTab] = useState<DataTabId>(deepLink.data ?? 'storage')
   const [settings, setSettings] = useState<SettingsMap>({})
   const [loading, setLoading] = useState(true)
   const dirtyRef = useRef(false)
