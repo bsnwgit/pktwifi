@@ -61,23 +61,54 @@ async def resolve_credential(db: aiosqlite.Connection, config: dict) -> dict:
 
 async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResult) -> None:
     for ap in result.access_points:
-        cur = await db.execute(
-            """INSERT INTO access_points
-               (collector_id, external_id, name, mac_address, ip_address, vendor, model,
-                firmware_version, site, floor, status, is_rogue, uptime_seconds, last_seen)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-               ON CONFLICT(collector_id, external_id) DO UPDATE SET
-                 name=excluded.name, mac_address=excluded.mac_address, ip_address=excluded.ip_address,
-                 vendor=excluded.vendor, model=excluded.model, firmware_version=excluded.firmware_version,
-                 site=excluded.site, floor=excluded.floor, status=excluded.status,
-                 is_rogue=excluded.is_rogue, uptime_seconds=excluded.uptime_seconds,
-                 last_seen=datetime('now')
-               RETURNING id""",
-            (collector_id, ap.external_id, ap.name, ap.mac_address, ap.ip_address, ap.vendor, ap.model,
-             ap.firmware_version, ap.site, ap.floor, ap.status, int(ap.is_rogue), ap.uptime_seconds),
-        )
-        ap_row = await cur.fetchone()
-        ap_id = ap_row[0]
+        # external_id is only stable within one collector's own ID scheme —
+        # UniFi's api_key mode reports Integration-API UUIDs while userpass
+        # mode reports classic-API Mongo _ids for the very same device, and a
+        # deleted-and-recreated collector row changes collector_id too (its
+        # old APs get orphaned to collector_id=NULL via ON DELETE SET NULL,
+        # not removed). The (collector_id, external_id) key alone can't catch
+        # either case, so before inserting a "new" AP, check whether a row
+        # for this real device (same MAC) already exists under some other
+        # identity and reparent it instead of creating a duplicate.
+        ap_id = None
+        if ap.mac_address:
+            async with db.execute(
+                """SELECT id FROM access_points WHERE mac_address = ?
+                   AND NOT (collector_id = ? AND external_id = ?)""",
+                (ap.mac_address, collector_id, ap.external_id),
+            ) as cur:
+                stray = await cur.fetchone()
+            if stray:
+                ap_id = stray[0]
+                await db.execute(
+                    """UPDATE access_points SET
+                         collector_id=?, external_id=?, name=?, ip_address=?, vendor=?, model=?,
+                         firmware_version=?, site=?, floor=?, status=?, is_rogue=?, uptime_seconds=?,
+                         last_seen=datetime('now')
+                       WHERE id=?""",
+                    (collector_id, ap.external_id, ap.name, ap.ip_address, ap.vendor, ap.model,
+                     ap.firmware_version, ap.site, ap.floor, ap.status, int(ap.is_rogue),
+                     ap.uptime_seconds, ap_id),
+                )
+
+        if ap_id is None:
+            cur = await db.execute(
+                """INSERT INTO access_points
+                   (collector_id, external_id, name, mac_address, ip_address, vendor, model,
+                    firmware_version, site, floor, status, is_rogue, uptime_seconds, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                   ON CONFLICT(collector_id, external_id) DO UPDATE SET
+                     name=excluded.name, mac_address=excluded.mac_address, ip_address=excluded.ip_address,
+                     vendor=excluded.vendor, model=excluded.model, firmware_version=excluded.firmware_version,
+                     site=excluded.site, floor=excluded.floor, status=excluded.status,
+                     is_rogue=excluded.is_rogue, uptime_seconds=excluded.uptime_seconds,
+                     last_seen=datetime('now')
+                   RETURNING id""",
+                (collector_id, ap.external_id, ap.name, ap.mac_address, ap.ip_address, ap.vendor, ap.model,
+                 ap.firmware_version, ap.site, ap.floor, ap.status, int(ap.is_rogue), ap.uptime_seconds),
+            )
+            ap_row = await cur.fetchone()
+            ap_id = ap_row[0]
 
         for radio in ap.radios:
             cur = await db.execute(
