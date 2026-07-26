@@ -107,6 +107,30 @@ async def _paginate(client: httpx.AsyncClient, url: str) -> list[dict]:
     return items
 
 
+async def _resolve_https_base(client: httpx.AsyncClient, base: str, probe_path: str) -> str:
+    """If `base` is http:// and the controller 301s to https:// (nginx
+    terminating plain HTTP with a redirect — common on UniFi OS consoles),
+    resolve the real https:// origin up front via a safe GET before any
+    POST is ever issued from this base. This matters because following a
+    redirect on a POST silently downgrades it to a GET per standard
+    HTTP-client redirect semantics (matches browser behavior for 301/302,
+    not an httpx bug) — the login POST's JSON body gets dropped entirely
+    on the hop, producing a 401 the actual credentials never caused.
+    Confirmed on a live UDM-Pro: http://<ip>/api/auth/login 301s to
+    https://<ip>/api/auth/login; letting httpx auto-follow it turned the
+    login into a bodyless GET, while POSTing straight to the https URL
+    with the identical credentials succeeded immediately. GETs are safe to
+    let auto-follow since there's no body to lose."""
+    if not base.startswith("http://"):
+        return base
+    try:
+        probe = await client.get(f"{base}{probe_path}", follow_redirects=True)
+        port = f":{probe.url.port}" if probe.url.port else ""
+        return f"{probe.url.scheme}://{probe.url.host}{port}"
+    except Exception:
+        return base  # best-effort — fall back to the configured URL if the probe itself fails
+
+
 def _freq_band(freq) -> str | None:
     """Map the Integration API's frequencyGHz (2.4 / 5 / 6) to the band
     strings the rest of the app uses."""
@@ -154,9 +178,14 @@ class UnifiCollector(Collector):
 
     async def _poll_api_key(self) -> PollResult:
         headers = {"X-API-KEY": self.api_key, "Accept": "application/json"}
-        integration_base = f"{self.base}/proxy/network/integration/v1"
 
         async with httpx.AsyncClient(timeout=20, verify=self.verify_tls, headers=headers, follow_redirects=True) as client:
+            # Only GETs happen in this mode today, so the http->https POST
+            # downgrade bug (see _resolve_https_base) can't bite yet — but
+            # resolving up front keeps this path consistent with userpass
+            # mode and future-proofs it if a write call is ever added here.
+            self.base = await _resolve_https_base(client, self.base, "/proxy/network/integration/v1/sites")
+            integration_base = f"{self.base}/proxy/network/integration/v1"
             sites = await _paginate(client, f"{integration_base}/sites")
             site_id = None
             for s in sites:
@@ -281,6 +310,7 @@ class UnifiCollector(Collector):
 
     async def _poll_userpass(self) -> PollResult:
         async with httpx.AsyncClient(timeout=20, verify=self.verify_tls, follow_redirects=True) as client:
+            self.base = await _resolve_https_base(client, self.base, "/api/login")
             login_resp = await client.post(
                 self._login_path(), json={"username": self.username, "password": self.password}
             )
