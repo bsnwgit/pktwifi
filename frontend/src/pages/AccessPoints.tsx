@@ -129,7 +129,7 @@ export default function AccessPoints() {
       <div className="flex items-center gap-3 flex-wrap">
         <input
           type="text"
-          placeholder="Search name, MAC, IP, vendor, model…"
+          placeholder="Search name, MAC, IP, vendor, model, status, site, floor…"
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="text-sm bg-gray-800 border border-gray-700 text-white placeholder-gray-500 rounded-lg px-3 py-1.5 w-64 focus:outline-none focus:border-sky-500"
