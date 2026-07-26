@@ -65,12 +65,23 @@ export default function AccessPoints() {
             <div className="space-y-2">
               {selected.radios.length === 0 && <p className="text-sm text-gray-500">No radio data reported.</p>}
               {selected.radios.map(r => (
-                <div key={r.id} className="bg-gray-800/50 rounded-lg px-3 py-2 text-sm flex justify-between">
-                  <span className="text-white">{r.band}</span>
-                  <span className="text-gray-400">
-                    ch {r.channel ?? '—'} · {r.utilization_pct != null ? `${r.utilization_pct.toFixed(0)}%` : '—'} util · {r.client_count} clients
-                  </span>
-                </div>
+                // An "unknown"-band row is the client bucket UniFi API-key
+                // mode produces (clients aren't attributed to a radio there) —
+                // render it as a clients line, not a broken-looking radio.
+                r.band === 'unknown' ? (
+                  <div key={r.id} className="bg-gray-800/50 rounded-lg px-3 py-2 text-sm flex justify-between">
+                    <span className="text-white">Clients</span>
+                    <span className="text-gray-400">{r.client_count} connected · per-radio breakdown not reported</span>
+                  </div>
+                ) : (
+                  <div key={r.id} className="bg-gray-800/50 rounded-lg px-3 py-2 text-sm flex justify-between">
+                    <span className="text-white">{r.band}</span>
+                    <span className="text-gray-400">
+                      ch {r.channel ?? '—'}{r.channel_width_mhz ? ` @ ${r.channel_width_mhz}MHz` : ''} · {r.utilization_pct != null ? `${r.utilization_pct.toFixed(0)}%` : '—'} util
+                      {!selected.radios.some(x => x.band === 'unknown') && <> · {r.client_count} clients</>}
+                    </span>
+                  </div>
+                )
               ))}
             </div>
             <button onClick={() => setSelected(null)} className="mt-4 text-sm text-sky-400 hover:text-sky-300">Close</button>
