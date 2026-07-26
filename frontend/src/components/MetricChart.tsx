@@ -1,16 +1,28 @@
+import { useMemo } from 'react'
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from 'recharts'
 import { MetricPoint } from '../api/client'
 
-function fmtTick(ts: string): string {
-  return new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z')
-    .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+function toMs(ts: string): number {
+  return new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z').getTime()
+}
+
+function tsShort(ms: number): string {
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 /**
  * Small time-series line chart for one radio_metrics field — shared by the
- * Access Point detail modal for both "radio detail" metrics (utilization,
- * retry %) and client count over time. Renders "No data yet" instead of an
- * empty chart when the window has no samples (e.g. a just-added collector).
+ * Metrics page for both "radio detail" metrics (utilization, retry %) and
+ * client count over time.
+ *
+ * The X axis must be a real numeric time scale (type="number" scale="time"
+ * domain={['dataMin','dataMax']}), same as pktsnmp's MetricsPage chart —
+ * without it, recharts defaults XAxis to type="category", which just
+ * evenly spaces whatever points happen to be in the array with no regard
+ * to their actual timestamps. That made every time-window selection look
+ * nearly identical: switching 1h -> 7d didn't visibly change anything
+ * because the points were never positioned by real elapsed time in the
+ * first place.
  */
 export default function MetricChart({ data, dataKey, label, color, unit = '' }: {
   data: MetricPoint[]
@@ -19,7 +31,11 @@ export default function MetricChart({ data, dataKey, label, color, unit = '' }: 
   color: string
   unit?: string
 }) {
-  const points = data.filter(p => p[dataKey] != null)
+  const points = useMemo(
+    () => data.filter(p => p[dataKey] != null).map(p => ({ ...p, tMs: toMs(p.ts) })),
+    [data, dataKey],
+  )
+
   if (points.length === 0) {
     return (
       <div>
@@ -40,10 +56,18 @@ export default function MetricChart({ data, dataKey, label, color, unit = '' }: 
       <ResponsiveContainer width="100%" height={80}>
         <LineChart data={points} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
           <CartesianGrid stroke="#1f2937" strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="ts" tickFormatter={fmtTick} tick={{ fontSize: 10, fill: '#6b7280' }} minTickGap={40} />
+          <XAxis
+            dataKey="tMs"
+            type="number"
+            scale="time"
+            domain={['dataMin', 'dataMax']}
+            tickFormatter={tsShort}
+            tick={{ fontSize: 10, fill: '#6b7280' }}
+            minTickGap={40}
+          />
           <YAxis hide domain={[0, 'auto']} />
           <Tooltip
-            labelFormatter={fmtTick}
+            labelFormatter={(v: number) => new Date(v).toLocaleString()}
             formatter={(v: number) => [`${Math.round(v)}${unit}`, label]}
             contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 6, fontSize: 11 }}
             labelStyle={{ color: '#9ca3af' }}
