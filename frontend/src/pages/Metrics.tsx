@@ -201,7 +201,9 @@ export default function Metrics() {
                 </div>
               ) : metrics && Object.keys(metrics).length > 0 && chartRange ? (
                 <div className="space-y-4">
-                  {Object.entries(metrics).map(([band, points]) => (
+                  {Object.entries(metrics)
+                    .filter(([band, points]) => band !== 'unknown' || points.some(p => p.client_count != null))
+                    .map(([band, points]) => (
                     <div key={band} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
                       <p className="text-sm text-sky-400 font-medium mb-3">{band === 'unknown' ? 'Client bucket (no per-radio breakdown reported)' : band}</p>
                       <div className="space-y-4">

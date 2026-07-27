@@ -59,6 +59,56 @@ async def resolve_credential(db: aiosqlite.Connection, config: dict) -> dict:
     return resolved
 
 
+async def _merge_stray_ap(db: aiosqlite.Connection, stray_id: int, canonical_id: int) -> None:
+    """Fold a leftover duplicate AP row (stray_id) into the row that's
+    actually current (canonical_id), preserving history instead of losing it
+    to an ON DELETE CASCADE. Radios that share a band with an existing
+    canonical radio can't be reparented directly (UNIQUE(access_point_id,
+    band)), so their metrics/clients move to the canonical radio and the
+    stray radio row is dropped; radios for a band the canonical row doesn't
+    have yet are reparented outright."""
+    async with db.execute(
+        "SELECT id, band FROM radios WHERE access_point_id = ?", (stray_id,)
+    ) as cur:
+        stray_radios = await cur.fetchall()
+    for radio_id, band in stray_radios:
+        async with db.execute(
+            "SELECT id FROM radios WHERE access_point_id = ? AND band = ?",
+            (canonical_id, band),
+        ) as cur:
+            canon_radio = await cur.fetchone()
+        if canon_radio:
+            canon_radio_id = canon_radio[0]
+            await db.execute(
+                "UPDATE radio_metrics SET radio_id = ? WHERE radio_id = ?",
+                (canon_radio_id, radio_id),
+            )
+            await db.execute(
+                "UPDATE wifi_clients SET radio_id = ? WHERE radio_id = ?",
+                (canon_radio_id, radio_id),
+            )
+            await db.execute("DELETE FROM radios WHERE id = ?", (radio_id,))
+        else:
+            await db.execute(
+                "UPDATE radios SET access_point_id = ? WHERE id = ?", (canonical_id, radio_id)
+            )
+    await db.execute(
+        "UPDATE wifi_clients SET access_point_id = ? WHERE access_point_id = ?",
+        (canonical_id, stray_id),
+    )
+    await db.execute(
+        "UPDATE client_events SET from_ap_id = ? WHERE from_ap_id = ?", (canonical_id, stray_id)
+    )
+    await db.execute(
+        "UPDATE client_events SET to_ap_id = ? WHERE to_ap_id = ?", (canonical_id, stray_id)
+    )
+    await db.execute(
+        "UPDATE alert_events SET access_point_id = ? WHERE access_point_id = ?",
+        (canonical_id, stray_id),
+    )
+    await db.execute("DELETE FROM access_points WHERE id = ?", (stray_id,))
+
+
 async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResult) -> None:
     for ap in result.access_points:
         # external_id is only stable within one collector's own ID scheme —
@@ -78,6 +128,26 @@ async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResu
                 (ap.mac_address, collector_id, ap.external_id),
             ) as cur:
                 stray = await cur.fetchone()
+            if stray:
+                # A stray row is only safe to reparent if the target identity
+                # isn't already owned by a different row — otherwise this
+                # UPDATE violates the (collector_id, external_id) UNIQUE
+                # constraint and, since it re-runs every poll, permanently
+                # kills future polling for this collector. This happens when
+                # an older orphaned duplicate lingers alongside a row that's
+                # already correctly identified: fully merge the stray's
+                # history into that row (rather than just leaving the
+                # duplicate stranded) so it doesn't keep showing up as a
+                # second AP.
+                async with db.execute(
+                    "SELECT id FROM access_points WHERE collector_id = ? AND external_id = ?",
+                    (collector_id, ap.external_id),
+                ) as cur2:
+                    existing = await cur2.fetchone()
+                if existing:
+                    await _merge_stray_ap(db, stray_id=stray[0], canonical_id=existing[0])
+                    ap_id = existing[0]
+                    stray = None
             if stray:
                 ap_id = stray[0]
                 await db.execute(
