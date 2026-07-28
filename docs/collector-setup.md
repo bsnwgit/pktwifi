@@ -1,32 +1,61 @@
 # pktWiFi Collector Setup
 
-Each collector is created under **Collectors** in the UI (admin only): a
-name, a type, a poll interval, an enabled toggle, and a config form.
+Each controller is created under **Settings -> Controllers** in the UI
+(admin only). This was a separate top-level **Collectors** nav item before
+it moved into Settings alongside the new Credentials and Sites tabs — the
+term "controller" is used in the UI, but the backend API/DB and this doc
+still say "collector" throughout. A controller is one row: a name, a type,
+a poll interval, an enabled toggle, and a config form.
 
 The config form is schema-driven (`app/wifi/collectors/field_schema.py` +
 `frontend/src/components/CollectorConfigForm.tsx`) — each collector type
 declares its fields (text/password/number/toggle/select/multiselect/
-host-list/site-picker) with labels, placeholders, and help text, and the
-UI renders real inputs instead of a raw JSON blob. Fields can be
-conditional (`show_if`) — for example, the UniFi collector only shows
-username/password fields when "Username & password" is selected, and only
-shows the API-key field when "API key" is selected. An **"Edit as JSON"**
-link in the Collector modal is still available for pasting a config
-directly or for anything the form doesn't cover; it round-trips through
-the same config dict, so switching back to the form re-parses whatever
-you typed.
+host-list/site-picker/credential-picker) with labels, placeholders, and
+help text, and the UI renders real inputs instead of a raw JSON blob.
+Fields can be conditional (`show_if`) — for example, the UniFi collector
+only shows the username/password credential picker when "Username &
+password" is selected, and only shows the API-key credential picker when
+"API key" is selected. An **"Edit as JSON"** link in the Controller modal
+is still available for pasting a config directly or for anything the form
+doesn't cover; it round-trips through the same config dict, so switching
+back to the form re-parses whatever you typed.
 
-Secret fields inside that config (passwords, API keys, SNMP v3
-credentials) are Fernet-encrypted at rest — see
-`app/wifi/collectors/crypto.py` and `credential_key` in `config.yaml`.
+## Credentials live in a separate library, not inline in the config
+
+Every field that used to be a raw secret typed into the collector's own
+config (SNMP community/v3 auth, a controller username/password, an API
+key) is now a **credential picker** instead: a dropdown sourced from
+**Settings -> Credentials**, a separate named credential library (four
+types — username/password, API key/token, SNMP v2c, SNMP v3),
+Fernet-encrypted at rest and write-only through the API. A controller's
+config stores only a `credential_id` referencing the saved credential;
+`app/wifi/poll_engine.resolve_credential` decrypts it and merges the real
+auth fields in at poll time. This means:
+
+- Creating a controller requires first creating (or reusing) a matching
+  credential under Settings -> Credentials.
+- The JSON examples below show `credential_id` rather than inline
+  `username`/`password`/`api_key`/`community` — that's the form the field
+  schema actually produces now.
+- If you paste a config via **Edit as JSON** with inline secret fields
+  instead of a `credential_id`, they still work — `resolve_credential` is a
+  no-op when `credential_id` is absent — but the resulting collector won't
+  benefit from the credential library (rotation, reuse across controllers,
+  delete-protection), so this isn't the recommended path.
+- Deleting a credential still referenced by a controller is blocked — the
+  error names which controller(s) use it.
+- The Controller modal has a **Test Credentials** button (once a credential
+  is selected) that runs a real, save-nothing auth attempt against the
+  target currently in the form and shows pass/fail with the full error
+  inline — use it before ever creating (or polling) the controller itself.
 
 Any **Site** field in a collector's form is a dropdown populated from
 **Settings -> Sites** (`site_select` field type) rather than a free-typed
-string — see the README's [Sites](../README.md#sites) section for how
-that catalog works, and the UniFi section below for a site-naming gotcha
-specific to that collector.
+string — see the README's [Vendor Collectors](../README.md#vendor-collectors)
+section (Sites paragraph) for how that catalog works, and the UniFi section
+below for a site-naming gotcha specific to that collector.
 
-Once a collector is saved, use its **Poll Now** button (Collectors page)
+Once a controller is saved, use its **Poll Now** action (Controllers page)
 to poll immediately instead of waiting for the interval. On failure, a
 modal shows the full error text with a copy-to-clipboard button — useful
 for getting the exact underlying error out of a truncated table cell.
@@ -42,17 +71,18 @@ per-radio utilization/tx-power/noise-floor unless the device happens to
 expose that over the standard MIB (most vendor gear doesn't; use a
 vendor-native collector below for real RF detail).
 
-Fields: SNMP version (v2c/v3), community string (v2c) or
-username/auth-protocol/auth-password/priv-protocol/priv-password (v3),
-port (default 161), and a repeatable **hosts** list where each host has an
-IP, a name, a **Site** (picked from Settings -> Sites), and a floor.
+Fields: an **SNMP credential** picked from Settings -> Credentials
+(type `snmp_v2c` or `snmp_v3` — the credential itself carries the version,
+community string, or v3 username/auth/priv secrets), port (default 161),
+and a repeatable **hosts** list where each host has an IP, a name, a
+**Site** (picked from Settings -> Sites), and a floor.
 
-As raw config JSON, this is equivalent to:
+As raw config JSON (the "Edit as JSON" shape, matching what the form
+produces), this is equivalent to:
 
 ```json
 {
-  "version": "v2c",
-  "community": "public",
+  "credential_id": 3,
   "port": 161,
   "hosts": [
     { "ip": "10.0.1.11", "name": "ap-lobby-1", "site": "HQ", "floor": "1" },
@@ -61,34 +91,27 @@ As raw config JSON, this is equivalent to:
 }
 ```
 
-For SNMPv3, replace `community` with:
-
-```json
-{
-  "version": "v3",
-  "username": "monitor",
-  "auth_protocol": "SHA",
-  "auth_password": "...",
-  "priv_protocol": "AES",
-  "priv_password": "...",
-  "hosts": [ ... ]
-}
-```
+`credential_id` must point to an existing SNMP v2c or v3 credential under
+Settings -> Credentials. Create it there first (community string for v2c;
+username/auth-protocol/auth-password/priv-protocol/priv-password for v3) —
+there's no way to set those secrets from this collector's own form anymore.
 
 ---
 
 ## Cisco Meraki (`cisco_meraki`)
 
 Dashboard API v1 (https://developer.cisco.com/meraki/api-v1/). Get an API
-key from Dashboard -> My Profile -> API access, and find your
+key from Dashboard -> My Profile -> API access, save it as an **API key
+credential** under Settings -> Credentials, and find your
 `organization_id` via `GET /organizations`.
 
-Fields: API key (required), Organization ID (required), and a repeatable
-Network IDs list.
+Fields: an API-key credential (required, picked from Settings ->
+Credentials), Organization ID (required), and a repeatable Network IDs
+list.
 
 ```json
 {
-  "api_key": "your-dashboard-api-key",
+  "credential_id": 5,
   "organization_id": "123456",
   "network_ids": []
 }
@@ -116,15 +139,15 @@ standalone controller and a UDM/UDM-Pro/Cloud Key Gen2+ console — toggle
 **UDM / UDM-Pro / Cloud Key Gen2+** for the latter (paths get proxied
 under `/proxy/network`).
 
-Fields shown: Controller URL (no trailing slash), Username, Password,
-Site, the UDM toggle, and Verify TLS certificate.
+Fields shown: Controller URL (no trailing slash), a **username/password
+credential** (picked from Settings -> Credentials), Site, the UDM toggle,
+and Verify TLS certificate.
 
 ```json
 {
   "controller_url": "https://10.0.0.1",
   "auth_method": "userpass",
-  "username": "monitor",
-  "password": "...",
+  "credential_id": 2,
   "site": "default",
   "udm": false,
   "verify_tls": false
@@ -132,7 +155,7 @@ Site, the UDM toggle, and Verify TLS certificate.
 ```
 
 Create a dedicated local (non-cloud) admin/read-only account on the
-controller for this rather than reusing your own login.
+controller and save it as a credential rather than reusing your own login.
 
 **Site slug gotcha:** the UniFi UI's Site name is the `desc` field — the
 URL path segment the API actually needs is a separate `name` slug that the
@@ -162,33 +185,38 @@ Ubiquiti's official local Network Integration API v1
 header instead of a username/password login. Only available on a UniFi OS
 console (UDM/UDM-Pro/Cloud Gateway) with Integrations enabled under
 Settings -> Control Plane -> Integrations in the UniFi UI itself — there
-is no standalone-controller equivalent.
+is no standalone-controller equivalent. **Verified against a live
+UDM-Pro.**
 
-Fields shown: Controller URL, API key, Site, Verify TLS certificate (no
-UDM toggle — this mode is UniFi-OS-only by definition).
+Fields shown: Controller URL, an **API-key credential** (picked from
+Settings -> Credentials), Site, Verify TLS certificate (no UDM toggle —
+this mode is UniFi-OS-only by definition).
 
 ```json
 {
   "controller_url": "https://10.0.0.1",
   "auth_method": "api_key",
-  "api_key": "...",
+  "credential_id": 7,
   "site": "default",
   "verify_tls": false
 }
 ```
 
 Site resolution in this mode matches against the Integration API's own
-`/sites` list by name/description, falling back to the single site if
+`/self/sites` list by name/description, falling back to the single site if
 there's only one.
 
-> The Integration API is intentionally a "limited subset focused on
-> common operations" per Ubiquiti's own description — it does not expose
-> the per-radio channel/utilization breakdown the classic API does, so
-> API-key-mode devices report coarse online/offline status only, with an
-> empty radios list. This mode has not been verified against live UniFi OS
-> hardware — endpoint paths and the field casing follow the published
-> docs; spot-check `app/wifi/collectors/unifi.py`'s `_first()` key-name
-> probing against a real response if you rely on it.
+> AP-level detail is real in this mode — online/offline, per-radio
+> channel/width/standard, and tx-retry-% all come back correctly. **Per-
+> client detail is a confirmed API limitation, not a parsing gap:**
+> inspecting the raw response directly shows the Integration API's client
+> payload carries only `id`/`name`/`macAddress`/`ipAddress`/`connectedAt`/
+> `uplinkDeviceId`/`type` — no SSID, RSSI, protocol, tx/rx rate, or
+> per-radio attribution, at either the list or per-client detail endpoint.
+> Every client from an API-key-mode controller lands in a single
+> "Unassigned / no per-radio breakdown" bucket in the UI. Switch to
+> username/password mode for full per-client detail. `connectedAt` is
+> real and used as the Clients page's **Connected** column.
 
 ---
 
@@ -210,5 +238,6 @@ implemented yet" error until someone builds them out:
 Each stub file's docstring has enough detail to implement it the same way
 `cisco_meraki.py` / `unifi.py` were: return a `PollResult` built from
 `AccessPointReading` / `RadioReading` / `ClientReading` (`base.py`), add a
-field-schema entry in `registry.py`, and flip `"implemented": True` once
-tested against real hardware.
+field-schema entry in `registry.py` (using `credential_select` for any
+auth fields, matching the existing collectors), and flip
+`"implemented": True` once tested against real hardware.
