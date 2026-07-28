@@ -225,6 +225,13 @@ item) and the **Sites** catalog now live inside Settings, alongside a new
 There's also a floating **AI Assistant** chat button available from any
 authenticated page (not a nav item) — see [AI Assistant](#ai-assistant).
 
+Most pages and Settings sub-tabs (Dashboard, Access Points, Clients,
+Metrics, Alerts, Logs, and the Users/User Keys/Controllers/Sites/
+Credentials/Suite Integration/SSL-TLS Settings tabs) also have a small
+**?** help button next to their heading (`frontend/src/components/
+HelpButton.tsx`) that pops a short "How It Works" explainer for that page
+— quick in-app context without leaving for this README.
+
 The standalone "Integrations" page from earlier builds no longer exists;
 `/integrations` now redirects straight to `/settings`. Both directions of
 suite integration (the inbound token pktHub uses to proxy in, and the
@@ -631,6 +638,16 @@ settings, same tab). Each snapshot is a timestamped directory under
 `pktwifi.db` (settings, access points, collectors, alert rules, users) and
 `config.yaml`. Rotation count caps how many snapshots stay on disk — the
 oldest is deleted automatically once you exceed it.
+
+Each listed snapshot has a **Restore…** link that restores directly from
+that on-server snapshot — no download/upload round trip required.
+Expanding it shows a checkbox per file present in the snapshot
+(`pktwifi.db`, `config.yaml`), so you can restore just one piece instead
+of always restoring both together. A full bundle can also be downloaded
+(**Export bundle**) or uploaded (**Restore from bundle**), with the same
+per-file selection available on upload. Every restore requires
+confirmation and, for `config.yaml` changes, a service restart to take
+effect.
 
 Separately, **Settings -> Data -> Storage** controls *retention*, not
 backup: how many days resolved alert events and raw RF metric history
