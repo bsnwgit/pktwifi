@@ -78,13 +78,17 @@ const NAV = [
   { to: '/settings',       label: 'Settings',      icon: '⚙', adminOnly: true, dividerBefore: true },
 ]
 
-export default function Layout({ children }: { children: ReactNode }) {
+export default function Layout({ children, chromeless = false }: { children: ReactNode; chromeless?: boolean }) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [unacked, setUnacked] = useState<number>(0)
   const [showChangePw, setShowChangePw] = useState(false)
 
+  // Poll for unresolved+unacked alert count every 30s — skipped entirely
+  // when chromeless (embedded, badge is never shown) rather than gated
+  // inside the effect, so this hook still runs in a stable order either way.
   useEffect(() => {
+    if (chromeless) return
     const tick = async () => {
       try {
         const events = await api.getAlertEvents({ active: true, acked: false, limit: 500 })
@@ -103,11 +107,21 @@ export default function Layout({ children }: { children: ReactNode }) {
     navigate('/login')
   }
 
+  // Chromeless: embedded via pkthub's remote-settings iframe — no sidebar,
+  // no header, just the page content.
+  if (chromeless) {
+    return (
+      <div className="bg-gray-950 text-white min-h-screen p-5">
+        {children}
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-screen bg-gray-950 text-white overflow-hidden">
       <aside className="w-52 flex-shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col">
         <div className="flex items-center px-3 py-3 border-b border-gray-800">
-          <img src="/lockup-64h.png" alt="pktWiFi" className="w-full h-auto" />
+          <img src="lockup-64h.png" alt="pktWiFi" className="w-full h-auto" />
         </div>
 
         <nav className="flex-1 px-2 py-4 space-y-0.5">

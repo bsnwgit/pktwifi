@@ -35,6 +35,7 @@ from app.api import (
     mxtoolbox as mxtoolbox_router,
     sites as sites_router,
     ai as ai_router,
+    widgets as widgets_router,
 )
 
 settings = get_settings()
@@ -137,6 +138,7 @@ app.include_router(user_api_keys_router.router, prefix="/api/user-api-keys", tag
 app.include_router(ip_info_router.router,   prefix="/api/ip-info",      tags=["ip-info"])
 app.include_router(mxtoolbox_router.router, prefix="/api/mxtoolbox",    tags=["mxtoolbox"])
 app.include_router(ai_router.router,         prefix="/api/ai",           tags=["ai"])
+app.include_router(widgets_router.router,    prefix="/api/widgets",      tags=["widgets"])
 
 # -- Health check ------------------------------------------------------------------
 
