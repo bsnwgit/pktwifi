@@ -220,7 +220,11 @@ export const api = {
     }),
 
   // -- System ---------------------------------------------------------------------
-  getSystemInfo: () => request<{ version: string; install_dir: string; port: number }>('/system/info'),
+  getSystemInfo: () =>
+    request<{
+      app_name: string; version: string; install_dir: string
+      github: string; license: string; developer: string; contact: string
+    }>('/system/info'),
   listBackups: () => request<Array<{ name: string; path: string; size_bytes: number; files: string[] }>>('/system/backups'),
   runBackupNow: () => request<{ status: string; path: string; files: string[]; kept: number }>('/system/backups/run', { method: 'POST' }),
   restoreSnapshot: (name: string, files?: string[]): Promise<Record<string, string>> => {
