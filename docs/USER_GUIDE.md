@@ -44,6 +44,8 @@ Any IP address shown in the app is clickable and opens a lookup using your own p
 
 Almost every page and Settings tab has a small **?** button that opens a short "How It Works" explainer.
 
+For longer-form documentation, click **Documentation** in the sidebar (just above your account info) — it opens this guide, the Administrator Guide, and the Collector Setup guide as in-app tabs, so you don't need the repo checked out to read them.
+
 ## AI Assistant
 
 A floating chat button, available on every authenticated page, if your admin has configured an Anthropic API key.
