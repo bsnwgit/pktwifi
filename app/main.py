@@ -36,6 +36,7 @@ from app.api import (
     sites as sites_router,
     ai as ai_router,
     widgets as widgets_router,
+    docs as docs_router,
 )
 
 settings = get_settings()
@@ -139,6 +140,7 @@ app.include_router(ip_info_router.router,   prefix="/api/ip-info",      tags=["i
 app.include_router(mxtoolbox_router.router, prefix="/api/mxtoolbox",    tags=["mxtoolbox"])
 app.include_router(ai_router.router,         prefix="/api/ai",           tags=["ai"])
 app.include_router(widgets_router.router,    prefix="/api/widgets",      tags=["widgets"])
+app.include_router(docs_router.router,       prefix="/api/docs-content", tags=["docs"])
 
 # -- Health check ------------------------------------------------------------------
 
