@@ -484,8 +484,9 @@ Three tabs have their own left-hand sub-tab strip:
   uses to call into pktsnmp/pktflow/pktlog/pktpcap/pktipam). See
   [Suite Integration](#suite-integration) and
   [Integrating with Sibling pkt Apps](#integrating-with-sibling-pkt-apps).
-- **AI Assistant** — Anthropic API key + model picker for the in-app AI
-  assistant. See [AI Assistant](#ai-assistant).
+- **AI Assistant** — configure multiple providers, each with its own enable
+  toggle: local/self-hosted (Ollama, or any OpenAI-compatible endpoint) tried
+  first, then cloud (Anthropic, OpenAI). See [AI Assistant](#ai-assistant).
 - **SSL / TLS** — upload a certificate as either a combined PFX/P12 bundle
   (with passphrase) or a separate PEM cert+key pair; view expiry/subject/
   issuer for whatever's installed; remove it to fall back to plain HTTP.
@@ -569,17 +570,20 @@ dispatch (actual Slack post, actual SMTP send, etc.), not a dry run.
 A floating chat button (bottom-right, available from any authenticated
 page — `frontend/src/components/AiAssistant.tsx`) opens a slide-in drawer
 that sends your question, plus optional structured context from the
-current view (AP status, client counts, SNR/RSSI, alerts), to Claude via
-`POST /api/ai/chat` (`app/api/ai.py`). It's meant for network engineers to
-get a quick read on WiFi health data or a nudge on next diagnostic steps
-without leaving the page.
+current view (AP status, client counts, SNR/RSSI, alerts), to whichever AI
+provider is enabled via `POST /api/ai/chat` (`app/api/ai.py`). It's meant
+for network engineers to get a quick read on WiFi health data or a nudge
+on next diagnostic steps without leaving the page.
 
-Requires its own Anthropic API key — set at **Settings -> Security -> AI
-Assistant**, separate from any Claude Enterprise seat (get one at
-console.anthropic.com). Also pick a model there; Claude Haiku is the
-default (fastest/cheapest for this kind of question), with Sonnet and
-Opus available for harder cases. Until a key is set, the chat drawer
-explains it needs configuring rather than silently failing.
+Configure providers at **Settings -> Security -> AI Assistant**: local/
+self-hosted (Ollama, or any OpenAI-compatible endpoint) run entirely on
+hardware you control and are tried first; Anthropic (separate from any
+Claude Enterprise seat, get a key at console.anthropic.com; Claude Haiku
+is the default, fastest/cheapest for this kind of question, with Sonnet
+and Opus available for harder cases) and OpenAI are paid, cloud-hosted
+fallbacks. Each provider has its own enable toggle. Until at least one is
+enabled and configured, the chat drawer explains it needs configuring
+rather than silently failing.
 
 ---
 
@@ -688,7 +692,8 @@ Switch the controller to username/password auth for real per-client
 channel/SSID/signal/rate detail — see
 [Ubiquiti UniFi — two auth methods](#ubiquiti-unifi--two-auth-methods).
 
-**AI Assistant says it's not configured** — set an Anthropic API key at
+**AI Assistant says it's not configured** — enable and configure at least
+one provider (Ollama, a local endpoint, Anthropic, or OpenAI) at
 Settings -> Security -> AI Assistant; see [AI Assistant](#ai-assistant).
 
 ---
