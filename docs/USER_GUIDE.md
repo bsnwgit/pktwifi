@@ -48,4 +48,4 @@ For longer-form documentation, click **Documentation** in the sidebar (just abov
 
 ## AI Assistant
 
-A floating chat button, available on every authenticated page, if your admin has configured an Anthropic API key.
+A floating chat button, available on every authenticated page, if your admin has enabled an AI provider (local/self-hosted like Ollama, or a cloud provider like Anthropic or OpenAI).
