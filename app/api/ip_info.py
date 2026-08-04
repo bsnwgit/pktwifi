@@ -296,7 +296,8 @@ async def get_internal_ip_info(ip: str, user: CurrentUser):
     if not integration or not integration["base_url"] or not integration["suite_token"]:
         return InternalIpInfoResult(ip=ip, configured=False, error="pktIPAM integration is not configured — add one in Settings → Integrations")
 
-    client = SuiteClient(integration["base_url"], integration["suite_token"], suite_user="pktwifi", suite_role="admin")
+    client = SuiteClient(integration["base_url"], decrypt_str(integration["suite_token"]),
+                         suite_user="pktwifi", suite_role="admin")
     try:
         data = await client.get("/api/ip-addresses/lookup", params={"ip": ip})
     except httpx.HTTPStatusError as exc:
