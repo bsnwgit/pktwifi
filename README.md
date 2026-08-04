@@ -696,6 +696,13 @@ channel/SSID/signal/rate detail — see
 one provider (Ollama, a local endpoint, Anthropic, or OpenAI) at
 Settings -> Security -> AI Assistant; see [AI Assistant](#ai-assistant).
 
+**AI Assistant chat said "Not authenticated" even with a provider
+configured (fixed 2026-08-03)** — the chat request wasn't sending the
+session's auth token, so it failed pktWiFi's own login check before ever
+reaching the configured AI provider; unrelated to Ollama/Anthropic/OpenAI
+settings. Also fixed: connection/timeout failures reaching a provider used
+to show a blank error message; they now name the provider and its base URL.
+
 ---
 
 ## Development
