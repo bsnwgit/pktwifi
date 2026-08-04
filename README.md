@@ -538,7 +538,7 @@ Any public IP address rendered in the app is a clickable link (`GET /api/ip-info
 
 All four are called concurrently. Private/loopback/link-local/reserved/multicast addresses are rejected — external providers have nothing useful to say about them.
 
-Keys are **per-user**, not app-wide: each logged-in user stores their own under Settings -> User Keys (`app/api/user_api_keys.py`), and lookups run under that user's own key/quota — no shared/admin key, no cross-user visibility. A fifth provider slot, IPQualityScore, can be saved and tested there but isn't consumed by the lookup yet.
+Keys are **per-user**, not app-wide: each logged-in user stores their own under Settings -> User Keys (`app/api/user_api_keys.py`), and lookups run under that user's own key/quota — no shared/admin key, no cross-user visibility. Keys are Fernet-encrypted at rest (`app/wifi/collectors/crypto.py`, same `credential_key` used for controller credentials) — decrypted only in memory when a lookup runs or the owning user views their own key. A fifth provider slot, IPQualityScore, can be saved and tested there but isn't consumed by the lookup yet.
 
 MXToolbox's other commands — email/DNS record checks (SPF, DMARC, DKIM, MX, DNS, TXT, SOA, BIMI, MTA-STS, TLSRPT, A, AAAA) and active probes (ping, traceroute, TCP/HTTP/HTTPS/SMTP connect, run from MXToolbox's own infrastructure against the target) — are reachable via `POST /api/mxtoolbox/lookup` (`{command, argument, port?}`, `app/api/mxtoolbox.py`) but aren't surfaced in the UI yet.
 
