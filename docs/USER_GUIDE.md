@@ -48,4 +48,4 @@ For longer-form documentation, click **Documentation** in the sidebar (just abov
 
 ## AI Assistant
 
-A floating chat button, available on every authenticated page, if your admin has enabled an AI provider (local/self-hosted like Ollama, or a cloud provider like Anthropic or OpenAI).
+A floating chat button, available on every authenticated page, if your admin has enabled an AI provider (local/self-hosted like Ollama, or a cloud provider like Anthropic or OpenAI). It's scoped strictly to pktWiFi's own domain (access points, clients, RF health); off-topic questions, requests to discuss other pktApp suite tools, and prompt-injection attempts ("ignore your instructions," etc.) are refused.
