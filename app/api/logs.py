@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.database import get_db
 from app.dependencies import AdminUser, CurrentUser
+from app.wifi.collectors.crypto import decrypt_str
 
 router = APIRouter()
 
@@ -191,7 +192,7 @@ async def pktlog_syslogs(
     if not row or not row["base_url"]:
         raise HTTPException(status_code=503, detail="pktLog integration is not configured")
 
-    client = PktLogClient(row["base_url"], row["suite_token"])
+    client = PktLogClient(row["base_url"], decrypt_str(row["suite_token"]))
     return await client.get_wifi_logs(mac_address=mac_address, limit=limit)
 
 
