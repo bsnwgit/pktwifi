@@ -7,6 +7,8 @@ Options:  GET /api/widgets/options/* → JSON [{value,label}] for dynamic param 
 """
 from __future__ import annotations
 
+import html
+
 import aiosqlite
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -89,7 +91,7 @@ def _status_badge(status: str) -> str:
         return '<span class="badge bg">ONLINE</span>'
     if s == "offline":
         return '<span class="badge br">OFFLINE</span>'
-    return f'<span class="badge bn">{(status or "UNKNOWN").upper()}</span>'
+    return f'<span class="badge bn">{html.escape((status or "UNKNOWN").upper())}</span>'
 
 
 # ── AP Status widget ──────────────────────────────────────────────────────────
@@ -111,7 +113,7 @@ async def widget_ap_status():
 
     if rows:
         trs = "".join(
-            f"<tr><td>{r['name']}</td><td>{r.get('site') or ''}</td>"
+            f"<tr><td>{html.escape(str(r['name']))}</td><td>{html.escape(str(r.get('site') or ''))}</td>"
             f"<td>{_status_badge(r['status'])}</td><td>{r['clients']}</td></tr>"
             for r in rows
         )
@@ -148,11 +150,11 @@ async def widget_client_count(ap_id: int | None = None):
 
     total = sum(b["client_count"] or 0 for b in bands)
     tiles = "".join(
-        f'<div class="tile"><div class="tile-label">{b["band"]}</div><div class="tile-value">{b["client_count"] or 0}</div></div>'
+        f'<div class="tile"><div class="tile-label">{html.escape(str(b["band"]))}</div><div class="tile-value">{b["client_count"] or 0}</div></div>'
         for b in bands
     ) or '<div class="empty">No radios</div>'
     body = (
-        f'<div style="margin-bottom:8px;color:#64748b;font-size:11px">{ap_name}</div>'
+        f'<div style="margin-bottom:8px;color:#64748b;font-size:11px">{html.escape(str(ap_name))}</div>'
         f'<div class="tile-row"><div class="tile"><div class="tile-label">Total Clients</div><div class="tile-value">{total}</div></div></div>'
         f'<div class="tile-row">{tiles}</div>'
     )
@@ -179,8 +181,8 @@ async def widget_active_alerts():
     if rows:
         trs = "".join(
             f"<tr><td>{_status_badge('offline' if r['severity'] == 'critical' else 'unknown')}</td>"
-            f"<td>{r.get('ap_name') or ''}</td><td>{r['message']}</td>"
-            f"<td>{str(r['created_at'])[:19].replace('T',' ')}</td></tr>"
+            f"<td>{html.escape(str(r.get('ap_name') or ''))}</td><td>{html.escape(str(r['message']))}</td>"
+            f"<td>{html.escape(str(r['created_at'])[:19].replace('T',' '))}</td></tr>"
             for r in rows
         )
         body = (
