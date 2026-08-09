@@ -27,6 +27,7 @@ _SECRET_KEYS = {
     "notify_email_password",
     "notify_pagerduty_integration_key",
     "notify_tracecat_api_token",
+    "suite_token",
 }
 
 # AI provider keys use the masked-with-preserve-on-save convention (a sentinel
