@@ -33,19 +33,19 @@ Settings → Security → Auth: paste Okta's IdP metadata XML (auto-fills SSO UR
 
 ## Settings reference
 
-Two groups, split by a visual divider: the suite-common tabs every pkt app shares (General through User Keys), and pktWiFi-specific management (Controllers, Credentials, Sites, System).
+Two sections, chosen from a section bar above the tab bar: **Common** — the suite-common tabs every pkt app shares (General through System) — and **pktWiFi** — this app's own management tabs (Controllers, Credentials, Sites). Only the selected section's tabs appear in the row below, so switch sections if a tab isn't where you expect. Deep links to a tab select the right section automatically.
 
-| Tab | Sub-tabs | Covers |
-|---|---|---|
-| General | — | App name, timezone, Port (needs restart), Base URL, Restart Service |
-| Security | Users, Auth, Suite Integration, AI Assistant, SSL/TLS | Accounts; SAML; suite token (both directions); local/self-hosted (Ollama, OpenAI-compatible) + cloud (Anthropic, OpenAI) AI providers, each independently enabled, scoped strictly to pktWiFi's own domain with off-topic/prompt-injection questions refused server-side; cert upload |
-| Data | Storage, Backups | Retention windows + manual cleanup (SQLite-only, no backend picker); backup schedule/restore |
-| Notifications | — | Slack, Email (SMTP), PagerDuty, Webhook, TraceCat SOAR |
-| User Keys | — | Per-user Lucidchart token, private to each account |
-| Controllers | — | Add/edit/delete/poll vendor controllers |
-| Credentials | — | Named, reusable, Fernet-encrypted controller auth library |
-| Sites | — | Small name+description catalog feeding the Site dropdown in controller forms |
-| System | — | Read-only version + install directory |
+| Section | Tab | Sub-tabs | Covers |
+|---|---|---|---|
+| **Common** | General | — | App name, timezone, Port (needs restart), Base URL, Restart Service |
+| | Security | Users, Auth, Suite Integration, AI Assistant, SSL/TLS | Accounts; SAML; suite token (both directions); local/self-hosted (Ollama, OpenAI-compatible) + cloud (Anthropic, OpenAI) AI providers, each independently enabled, scoped strictly to pktWiFi's own domain with off-topic/prompt-injection questions refused server-side, and each given up to 180s to answer before the request fails (headroom for slow local models); cert upload |
+| | Data | Storage, Backups | Retention windows + manual cleanup (SQLite-only, no backend picker); backup schedule/restore |
+| | Notifications | — | Slack, Email (SMTP), PagerDuty, Webhook, TraceCat SOAR |
+| | User Keys | — | Per-user Lucidchart token, private to each account |
+| | System | — | Read-only version + install directory |
+| **pktWiFi** | Controllers | — | Add/edit/delete/poll vendor controllers |
+| | Credentials | — | Named, reusable, Fernet-encrypted controller auth library |
+| | Sites | — | Small name+description catalog feeding the Site dropdown in controller forms |
 
 The old standalone Collectors and Integrations nav items are gone — everything above lives under Settings now (`/integrations` and `/sites` both redirect there).
 
