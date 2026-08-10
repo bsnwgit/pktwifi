@@ -445,13 +445,19 @@ process without SSH.
 
 ## Settings
 
-Admin-only, reached via the **Settings** nav item. Tabs are split by a
-visual divider into two groups: the suite-common set every pkt app shares
-(General through System), and pktWiFi-specific management (Controllers,
-Credentials, Sites) — the latter three used to be their own top-level nav
-items before this session folded them into Settings, matching the
-convention every other pkt app already used for app-specific management.
-Three tabs have their own left-hand sub-tab strip:
+Admin-only, reached via the **Settings** nav item. Tabs are split into two
+**sections**, selected from a section bar above the tab bar: **Common** —
+the suite-common set every pkt app shares (General through System) — and
+**pktWiFi** — this app's own management tabs (Controllers, Credentials,
+Sites). The latter three used to be their own top-level nav items before
+they were folded into Settings, matching the convention every other pkt
+app already used for app-specific management. Choosing a section swaps the
+tab bar underneath, so only one group is visible at a time; previously all
+of them shared a single row separated by a thin divider. Deep links to a
+tab still work and select the section automatically. Two tabs have their
+own left-hand sub-tab strip:
+
+### Common
 
 | Tab | Sub-tabs | Covers |
 |---|---|---|
@@ -460,11 +466,15 @@ Three tabs have their own left-hand sub-tab strip:
 | **Data** | Storage, Backups | See below. |
 | **Notifications** | — | Alert-channel config: Slack, Email (SMTP), PagerDuty, generic Webhook, TraceCat SOAR — see [Alerting & Notifications](#alerting--notifications). |
 | **User Keys** | — | Personal (per-user, not shared) external API keys — currently a Lucidchart Personal Access Token, used for exporting diagrams. Each user manages their own; nobody else, including admins, can see another user's key value. |
-| *(divider)* | | |
+| **System** | — | Read-only version + install directory display. |
+
+### pktWiFi
+
+| Tab | Sub-tabs | Covers |
+|---|---|---|
 | **Controllers** | — | Add/edit/delete/poll vendor controllers; see [Vendor Collectors](#vendor-collectors). |
 | **Credentials** | — | Named, reusable controller auth library; see [Vendor Collectors](#vendor-collectors). |
 | **Sites** | — | Small managed location catalog; see [Vendor Collectors](#vendor-collectors). |
-| **System** | — | Read-only version + install directory display. |
 
 ### Security sub-tabs
 
@@ -584,6 +594,13 @@ and Opus available for harder cases) and OpenAI are paid, cloud-hosted
 fallbacks. Each provider has its own enable toggle. Until at least one is
 enabled and configured, the chat drawer explains it needs configuring
 rather than silently failing.
+
+Each provider call gets up to **180 seconds** before pktWiFi gives up on
+it. The ceiling is sized for a local model on modest hardware chewing
+through a complex, multi-part question — a shorter one turned those into
+spurious failures. Cloud providers rarely get anywhere near it. On
+overrun, the drawer says the provider didn't finish in time and suggests
+a shorter question, rather than showing a bare error.
 
 ---
 
