@@ -10,6 +10,8 @@ Log in with your username and password (or Okta SSO if configured). All roles ca
 
 **Dashboard**, **Access Points**, **Clients**, **Metrics**, **Alerts**, **Logs**. **Settings** is admin-only. A floating **AI Assistant** chat button is available on any page.
 
+Settings itself opens with a section bar: **Common** (General, Security, Data, Notifications, User Keys, System — identical across the pkt* apps) and **pktWiFi** (Controllers, Credentials, Sites). The tab row below shows one section at a time, so switch sections if a tab appears to be missing.
+
 ## Dashboard
 
 At-a-glance counts of total/online/offline/rogue access points, connected client count, and the current active alerts list.
