@@ -1353,7 +1353,7 @@ function UsersTab() {
 // -- Controllers tab (pktWiFi-specific) --------------------------------------------
 // The WiFi controller connections formerly managed on the top-level Collectors
 // page, relocated here per the suite convention of app-specific management
-// living right of the Settings tab divider. "Controller" is the user-facing
+// living in the app's own Settings section. "Controller" is the user-facing
 // term; the backend API/DB keep the original "collectors" naming.
 
 function defaultConfigFor(fields: FieldSchema[]): Record<string, unknown> {
@@ -2179,8 +2179,9 @@ function CredentialsTab() {
 // -- Main page ---------------------------------------------------------------------
 type TabId = 'general' | 'security' | 'data' | 'notifications' | 'apikeys' | 'controllers' | 'credentials' | 'sites' | 'system'
 
-// Tabs left of the divider are the suite-common set every pkt app shares;
-// tabs right of it (gapBefore) are pktWiFi-specific: Controllers (the WiFi
+// Tabs before gapBefore are the suite-common set every pkt app shares and make
+// up the "Common" section; gapBefore and everything after it are
+// pktWiFi-specific and make up the "pktWiFi" section: Controllers (the WiFi
 // controller connections that used to be the top-level Collectors page) and
 // Credentials (the named auth library those controller configs reference).
 const TABS: Array<{ id: TabId; label: string; adminOnly?: boolean; gapBefore?: boolean }> = [
@@ -2194,6 +2195,17 @@ const TABS: Array<{ id: TabId; label: string; adminOnly?: boolean; gapBefore?: b
   { id: 'credentials',   label: 'Credentials', adminOnly: true },
   { id: 'sites',         label: 'Sites', adminOnly: true },
 ]
+
+// ── Top-level sections — Common holds the tabs that used to sit left of the
+// divider (gapBefore); the app-specific section holds gapBefore and everything
+// after it. Split point is derived from TABS itself, not duplicated here.
+type SectionId = 'common' | 'app'
+const APP_SECTION_LABEL = 'pktWiFi'
+const FIRST_APP_TAB_INDEX = TABS.findIndex(t => t.gapBefore)
+const sectionOfTab = (id: TabId): SectionId => {
+  const idx = TABS.findIndex(t => t.id === id)
+  return idx >= 0 && idx < FIRST_APP_TAB_INDEX ? 'common' : 'app'
+}
 
 // ── Open-source packages actually used by this app (requirements.txt +
 // frontend/package.json), for the System tab's Licenses & Copyright card ──
@@ -2271,6 +2283,12 @@ export default function Settings() {
     }
   })()
   const [tab, setTab] = useState<TabId>(deepLink.tab)
+  const [section, setSection] = useState<SectionId>(sectionOfTab(deepLink.tab))
+  const selectSection = (s: SectionId) => {
+    setSection(s)
+    const firstVisible = TABS.filter(t => !t.adminOnly || isAdmin).find(t => sectionOfTab(t.id) === s)
+    if (firstVisible) setTab(firstVisible.id)
+  }
   const [securityTab, setSecurityTab] = useState<SecurityTabId>(deepLink.security ?? (isAdmin ? 'users' : 'auth'))
   const [dataTab, setDataTab] = useState<DataTabId>(deepLink.data ?? 'storage')
   const [settings, setSettings] = useState<SettingsMap>({})
@@ -2450,15 +2468,25 @@ export default function Settings() {
     <div className="space-y-4">
       <h1 className="text-xl font-bold text-white">pktWiFi - Settings</h1>
 
+      <div className="flex items-center gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1 w-fit">
+        <button onClick={() => selectSection('common')}
+          className={`text-sm px-4 py-1.5 rounded-lg whitespace-nowrap transition-colors ${section === 'common' ? 'bg-gray-700 text-white' : 'text-white hover:text-white'}`}>
+          Common
+        </button>
+        {TABS.some(t => (!t.adminOnly || isAdmin) && sectionOfTab(t.id) === 'app') && (
+          <button onClick={() => selectSection('app')}
+            className={`text-sm px-4 py-1.5 rounded-lg whitespace-nowrap transition-colors ${section === 'app' ? 'bg-gray-700 text-white' : 'text-white hover:text-white'}`}>
+            {APP_SECTION_LABEL}
+          </button>
+        )}
+      </div>
+
       <div className="flex items-center gap-1 bg-gray-900 border border-gray-800 rounded-xl p-1 w-fit overflow-x-auto">
-        {TABS.filter(t => !t.adminOnly || isAdmin).map(t => (
-          <Fragment key={t.id}>
-            {t.gapBefore && <div className="w-px self-stretch bg-gray-700 mx-2" />}
-            <button onClick={() => setTab(t.id)}
-              className={`text-sm px-4 py-1.5 rounded-lg whitespace-nowrap transition-colors ${tab === t.id ? 'bg-gray-700 text-white' : 'text-white hover:text-white'}`}>
-              {t.label}
-            </button>
-          </Fragment>
+        {TABS.filter(t => (!t.adminOnly || isAdmin) && sectionOfTab(t.id) === section).map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={`text-sm px-4 py-1.5 rounded-lg whitespace-nowrap transition-colors ${tab === t.id ? 'bg-gray-700 text-white' : 'text-white hover:text-white'}`}>
+            {t.label}
+          </button>
         ))}
       </div>
 
