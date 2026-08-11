@@ -208,11 +208,11 @@ export default function Metrics() {
                       <p className="text-sm text-sky-400 font-medium mb-3">{band === 'unknown' ? 'Client bucket (no per-radio breakdown reported)' : band}</p>
                       <div className="space-y-4">
                         {band !== 'unknown' && (
-                          <MetricChart data={points} dataKey="utilization_pct" label="Channel Utilization" color="#38bdf8" unit="%" range={chartRange} />
+                          <MetricChart data={points} dataKey="utilization_pct" label="Channel Utilization" color="#8ad8ea" unit="%" range={chartRange} />
                         )}
-                        <MetricChart data={points} dataKey="client_count" label="Client Count" color="#34d399" range={chartRange} />
+                        <MetricChart data={points} dataKey="client_count" label="Client Count" color="#9aeabd" range={chartRange} />
                         {band !== 'unknown' && (
-                          <MetricChart data={points} dataKey="retry_pct" label="Retry Rate" color="#f59e0b" unit="%" range={chartRange} />
+                          <MetricChart data={points} dataKey="retry_pct" label="Retry Rate" color="#f3c265" unit="%" range={chartRange} />
                         )}
                       </div>
                     </div>
