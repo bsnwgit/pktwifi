@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from 'recharts'
 import { MetricPoint } from '../api/client'
-import { axisProps, tooltipProps, gridProps, glow, INSTRUMENT } from './instrument'
+import { axisProps, tooltipProps, gridProps, glow, INSTRUMENT, LinePulseGradient } from './instrument'
 
 function toMs(ts: string): number {
   return new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z').getTime()
@@ -69,6 +69,9 @@ export default function MetricChart({ data, dataKey, label, color, unit = '', ra
       </div>
       <ResponsiveContainer width="100%" height={80}>
         <LineChart data={points} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
+          <defs>
+            <LinePulseGradient id={`pulse-${dataKey}`} color={color} />
+          </defs>
           <CartesianGrid {...gridProps} />
           <XAxis
             dataKey="tMs"
@@ -87,7 +90,8 @@ export default function MetricChart({ data, dataKey, label, color, unit = '', ra
             contentStyle={tooltipProps.contentStyle}
             labelStyle={tooltipProps.labelStyle}
           />
-          <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+          <Line type="monotone" dataKey={dataKey} stroke={`url(#pulse-${dataKey})`} strokeWidth={1.5}
+                dot={false} connectNulls isAnimationActive={false} style={glow(color, 4)} />
         </LineChart>
       </ResponsiveContainer>
     </div>
