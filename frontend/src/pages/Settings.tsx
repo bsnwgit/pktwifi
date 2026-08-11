@@ -9,6 +9,7 @@ import { useAuth } from '../store/auth'
 import HelpButton from '../components/HelpButton'
 import CollectorConfigForm from '../components/CollectorConfigForm'
 import { copyToClipboard } from '../utils/clipboard'
+import { BrandLockup } from '../components/Brand'
 
 // -- Generic helpers -------------------------------------------------------------
 type SettingsMap = Record<string, unknown>
@@ -3109,7 +3110,7 @@ export default function Settings() {
             <div className="px-6 py-4 border-b border-gray-800 grid grid-cols-3 gap-4 items-center">
               <h2 className="text-sm font-semibold text-white">System: {systemInfo?.app_name ?? 'pktWiFi'}</h2>
               <div className="col-span-2">
-                <img src="lockup-64h.png" alt={systemInfo?.app_name ?? 'pktWiFi'} className="h-8 w-auto" />
+                <BrandLockup markSize={32} descriptor={null} />
               </div>
             </div>
             <div className="px-6 py-2">
