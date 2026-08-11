@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from 'recharts'
 import { MetricPoint } from '../api/client'
+import { axisProps, tooltipProps, gridProps, glow, INSTRUMENT } from './instrument'
 
 function toMs(ts: string): number {
   return new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z').getTime()
@@ -68,7 +69,7 @@ export default function MetricChart({ data, dataKey, label, color, unit = '', ra
       </div>
       <ResponsiveContainer width="100%" height={80}>
         <LineChart data={points} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
-          <CartesianGrid stroke="#211c14" strokeDasharray="3 3" vertical={false} />
+          <CartesianGrid {...gridProps} />
           <XAxis
             dataKey="tMs"
             type="number"
@@ -76,15 +77,15 @@ export default function MetricChart({ data, dataKey, label, color, unit = '', ra
             domain={range}
             allowDataOverflow
             tickFormatter={tickFormatter}
-            tick={{ fontSize: 10, fill: '#a9a294' }}
+            tick={axisProps.tick}
             minTickGap={40}
           />
           <YAxis hide domain={[0, 'auto']} />
           <Tooltip
             labelFormatter={(v: number) => new Date(v).toLocaleString()}
             formatter={(v: number) => [`${Math.round(v)}${unit}`, label]}
-            contentStyle={{ background: '#0d1219', border: '1px solid #2a2418', borderRadius: 6, fontSize: 11 }}
-            labelStyle={{ color: '#a9a294' }}
+            contentStyle={tooltipProps.contentStyle}
+            labelStyle={tooltipProps.labelStyle}
           />
           <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
         </LineChart>
