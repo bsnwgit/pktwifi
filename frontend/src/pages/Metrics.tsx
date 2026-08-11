@@ -210,9 +210,9 @@ export default function Metrics() {
                         {band !== 'unknown' && (
                           <MetricChart data={points} dataKey="utilization_pct" label="Channel Utilization" color="#38bdf8" unit="%" range={chartRange} />
                         )}
-                        <MetricChart data={points} dataKey="client_count" label="Client Count" color="#34d399" range={chartRange} />
+                        <MetricChart data={points} dataKey="client_count" label="Client Count" color="#9aeabd" range={chartRange} />
                         {band !== 'unknown' && (
-                          <MetricChart data={points} dataKey="retry_pct" label="Retry Rate" color="#f59e0b" unit="%" range={chartRange} />
+                          <MetricChart data={points} dataKey="retry_pct" label="Retry Rate" color="#f3c265" unit="%" range={chartRange} />
                         )}
                       </div>
                     </div>

@@ -68,7 +68,7 @@ export default function MetricChart({ data, dataKey, label, color, unit = '', ra
       </div>
       <ResponsiveContainer width="100%" height={80}>
         <LineChart data={points} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
-          <CartesianGrid stroke="#1f2937" strokeDasharray="3 3" vertical={false} />
+          <CartesianGrid stroke="#211c14" strokeDasharray="3 3" vertical={false} />
           <XAxis
             dataKey="tMs"
             type="number"
@@ -76,15 +76,15 @@ export default function MetricChart({ data, dataKey, label, color, unit = '', ra
             domain={range}
             allowDataOverflow
             tickFormatter={tickFormatter}
-            tick={{ fontSize: 10, fill: '#6b7280' }}
+            tick={{ fontSize: 10, fill: '#a9a294' }}
             minTickGap={40}
           />
           <YAxis hide domain={[0, 'auto']} />
           <Tooltip
             labelFormatter={(v: number) => new Date(v).toLocaleString()}
             formatter={(v: number) => [`${Math.round(v)}${unit}`, label]}
-            contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 6, fontSize: 11 }}
-            labelStyle={{ color: '#9ca3af' }}
+            contentStyle={{ background: '#0d1219', border: '1px solid #2a2418', borderRadius: 6, fontSize: 11 }}
+            labelStyle={{ color: '#a9a294' }}
           />
           <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
         </LineChart>
