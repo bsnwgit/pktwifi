@@ -8,7 +8,7 @@ Log in with your username and password (or Okta SSO if configured). All roles ca
 
 ## Navigation
 
-**Dashboard**, **Access Points**, **Clients**, **Metrics**, **Alerts**, **Logs**. **Settings** is admin-only. A floating **AI Assistant** chat button is available on any page.
+**Dashboard**, **Access Points**, **Clients**, **Metrics**, **Alerts**, **Logs**. **Settings** is admin-only.
 
 Settings itself opens with a section bar: **Common** (General, Security, Data, Notifications, User Keys, System — identical across the pkt* apps) and **pktWiFi** (Controllers, Credentials, Sites). The tab row below shows one section at a time, so switch sections if a tab appears to be missing.
 
@@ -47,7 +47,3 @@ Any IP address shown in the app is clickable and opens a lookup using your own p
 Almost every page and Settings tab has a small **?** button that opens a short "How It Works" explainer.
 
 For longer-form documentation, click **Documentation** in the sidebar (just above your account info) — it opens this guide, the Administrator Guide, and the Collector Setup guide as in-app tabs, so you don't need the repo checked out to read them.
-
-## AI Assistant
-
-A floating chat button, available on every authenticated page, if your admin has enabled an AI provider (local/self-hosted like Ollama, or a cloud provider like Anthropic or OpenAI). It's scoped strictly to pktWiFi's own domain (access points, clients, RF health); off-topic questions, requests to discuss other pktApp suite tools, and prompt-injection attempts ("ignore your instructions," etc.) are refused.

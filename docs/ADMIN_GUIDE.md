@@ -38,7 +38,6 @@ Two sections, chosen from a section bar above the tab bar: **Common** — the su
 | Section | Tab | Sub-tabs | Covers |
 |---|---|---|---|
 | **Common** | General | — | App name, timezone, Port (needs restart), Base URL, Restart Service |
-| | Security | Users, Auth, Suite Integration, AI Assistant, SSL/TLS | Accounts; SAML; suite token (both directions); local/self-hosted (Ollama, OpenAI-compatible) + cloud (Anthropic, OpenAI) AI providers, each independently enabled, scoped strictly to pktWiFi's own domain with off-topic/prompt-injection questions refused server-side, and each given up to 180s to answer before the request fails (headroom for slow local models); cert upload |
 | | Data | Storage, Backups | Retention windows + manual cleanup (SQLite-only, no backend picker); backup schedule/restore |
 | | Notifications | — | Slack, Email (SMTP), PagerDuty, Webhook, TraceCat SOAR |
 | | User Keys | — | Per-user Lucidchart token, private to each account |
