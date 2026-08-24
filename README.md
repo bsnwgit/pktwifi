@@ -731,6 +731,61 @@ cd frontend && npm install && npm run dev   # http://localhost:5175, proxies /ap
   `app/integrations/` doesn't yet ship a `pktipam_client.py` the way it
   does for pktsnmp/pktflow/pktlog/pktpcap.
 
+## Resonance (embedded assistant)
+
+Resonance is the suite's shared assistant. It mounts as a launcher in the bottom corner of every
+authenticated page, but the assistant itself runs on the resonance server, not inside pktWiFi.
+Configure it under **Settings → Resonance** (admin only); every field ships blank, so a fresh
+install shows nothing until it is pointed at a resonance server of its own.
+
+`app/integrations/resonance/` and `frontend/src/resonance/` are **vendored** — copied between
+pkt\* apps byte-for-byte except for `APP_SLUG`. They are deliberately not a published package,
+because `install.sh` builds a venv on customer hosts and a private index would put a credentialed
+network dependency in the middle of every install. pktLog is the reference implementation.
+
+```
+browser                 pktWiFi                       resonance
+embed.js  ──GET──▶  /api/resonance/code  ──POST──▶  /embed/session
+          ◀─code──                        ◀─code───
+frame ──────────────────────────────────────────────▶  /embed?c=<code>
+```
+
+pktWiFi vouches for whoever is signed in and receives a short-lived, single-use code. The key is
+encrypted at rest, never reaches the browser, and resonance never sees a pktWiFi credential.
+`GET /api/resonance/code` is the one cookie-authenticated route in the app — `embed.js` fetches it
+itself, outside the SPA, and the access token lives in memory — so `Sec-Fetch-Site` and `Origin`
+are both checked before the cookie is honoured.
+
+**The data surface.** Two documents let resonance discover what it may call, both public because
+they carry names rather than data:
+
+| path | what it is |
+|---|---|
+| `/.well-known/resonance.json` | the grant — the operations this install permits |
+| `/api/resonance/openapi.json` | those operations' OpenAPI, narrowed from the app's own |
+| `/api/resonance/docs` | the shipped guides, for resonance to ingest (suite token or admin) |
+
+Point resonance's **READ SPEC** at `/api/resonance/openapi.json`. The published operations are:
+
+- `getWifiSummary`
+- `listAccessPoints`
+- `getAccessPoint`
+- `listWifiClients`
+- `listRadios`
+- `listCollectors`
+- `listAlertEvents`
+- `listAlertRules`
+- `searchApplicationLog`
+- `ackAlertEvent`  *(writes)*
+- `ackAllAlertEvents`  *(writes)*
+
+Every call is made by pktWiFi's own page, same-origin, on the session of the person already signed
+in, so nothing here reaches data that person could not already open. Which operations exist is
+fixed in `app/api/resonance_data.py`, not configurable per install. Write operations are withheld
+from the grant entirely until an administrator sets a role to **Read and write**.
+
+**Never exposed:** a collector's stored controller credentials. Nothing here changes a channel or transmit power, deauthenticates a client, or creates, edits or deletes an access point, SSID, radio or collector. The app has no rule-toggle endpoint, so the assistant's writes are acknowledge-only.
+
 ## Log Forwarding
 
 pktWiFi writes its own application log to the in-app **Logs** page. It can also

@@ -42,6 +42,16 @@ AP/controller syslog and event context, including anything surfaced via a pktLog
 
 Any IP address shown in the app is clickable and opens a lookup using your own per-user API keys (Settings → User Keys), same pattern as the rest of the pkt suite.
 
+## The assistant
+
+If your administrator has set it up, a launcher sits in the bottom corner of every page. Click it to ask questions in a chat panel. The panel comes from the resonance server, so what it can help with depends on how your administrator configured it there.
+
+Depending on what your administrator has allowed for your role, it can look at this install's access points, clients, radios, collectors, alerts and logs — never anything your own account could not already open, and never a controller's stored credentials. It may also be able to **act**, but only in one way: acknowledging alerts. It will always say exactly what it is about to do and wait for you to say yes.
+
+It can never change a channel or a transmit power, disconnect a client, or add, change or delete an access point or a collector.
+
+If the launcher never appears, either your role is set to *No access* or the assistant could not load. Your administrator can see both under Settings → Resonance.
+
 ## Getting help in the app
 
 Almost every page and Settings tab has a small **?** button that opens a short "How It Works" explainer.
