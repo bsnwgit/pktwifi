@@ -69,6 +69,9 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
   )
 }
 
+// pktHub mirrors this menu in its own APPS sidebar, reading it from
+// app/api/nav.py's NAV_MANIFEST. Add or rename an entry here and it belongs
+// there too, or the hub keeps offering the old one.
 const NAV = [
   { to: '/',               label: 'Dashboard',     icon: '◑', adminOnly: false },
   { to: '/access-points',  label: 'Access Points', icon: '⬡', adminOnly: false },
@@ -108,11 +111,14 @@ export default function Layout({ children, chromeless = false }: { children: Rea
     navigate('/login')
   }
 
-  // Chromeless: embedded via pkthub's remote-settings iframe — no sidebar,
-  // no header, just the page content.
+  // Chromeless: embedded in pktHub — no sidebar, no header, just the page
+  // content. Definite height, not min-height: a page that fills its container
+  // sizes itself with h-full, which collapses to zero against an auto-height
+  // parent. This mirrors <main> below, so dropping the chrome changes what is
+  // on screen and not how the page lays out.
   if (chromeless) {
     return (
-      <div className="relative z-10 text-white min-h-screen p-6">
+      <div className="relative z-10 text-white h-screen overflow-auto p-6">
         {children}
       </div>
     )
