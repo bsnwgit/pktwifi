@@ -17,7 +17,7 @@ import json
 import logging
 import shutil
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -62,7 +62,7 @@ def run_backup_sync(db_path: str) -> dict:
     backup_root = Path(s["backup_path"])
     backup_root.mkdir(parents=True, exist_ok=True)
 
-    ts = datetime.utcnow().strftime("%Y-%m-%d_%H-%M")
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
     snap_dir = backup_root / f"backup_{ts}"
     snap_dir.mkdir(parents=True, exist_ok=True)
     result["path"] = str(snap_dir)

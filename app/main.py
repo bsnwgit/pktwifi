@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.database import init_db, seed_admin
+from app.version import get_version
 
 # -- Routers -------------------------------------------------------------------
 from app.api import (
@@ -132,7 +133,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="pktWiFi",
     description="Enterprise WiFi Analyzer — access point, RF, and client visibility for the pkt suite",
-    version="0.1.0",
+    version=get_version(),
     docs_url="/api/docs",
     redoc_url="/api/redoc",
     lifespan=lifespan,
@@ -181,6 +182,93 @@ _LOCK_ALLOW_PREFIXES = (
 # a redirect to an address that no longer answers.
 _LOCK_HEARTBEAT_MAX_AGE = 300  # seconds
 
+# How often the heartbeat is actually written. It only has to stay inside
+# _LOCK_HEARTBEAT_MAX_AGE, and pktHub proxies every user request through here —
+# so writing on each one meant a write plus a commit per request, all of them
+# contending for the same SQLite writer to record a fact that had not changed.
+_LOCK_HEARTBEAT_WRITE_EVERY = 60  # seconds
+
+# How long the lock state is trusted between reads. Unlocked is the normal
+# state, and it used to cost an open/query/close of the database on the event
+# loop for every single request just to re-learn it. A lock arriving from
+# pktHub therefore takes effect within this window rather than instantly —
+# except that POST /api/suite/direct-access calls invalidate_lock_cache()
+# directly, so the path that actually sets one is immediate anyway.
+_LOCK_STATE_TTL = 5.0  # seconds
+
+_lock_state_cache: tuple | None = None   # (locked, redirect_to)
+_lock_state_at: float = 0.0
+_last_heartbeat_at: float = 0.0
+
+
+def invalidate_lock_cache() -> None:
+    """Drop the cached lock state, so the next request re-reads it."""
+    global _lock_state_cache
+    _lock_state_cache = None
+
+
+async def _touch_heartbeat(db_path: str) -> None:
+    """Record that pktHub has been in touch. Also called from /api/health."""
+    import aiosqlite, json
+    from datetime import datetime, timezone
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('lock_heartbeat_at', ?)",
+            (json.dumps(datetime.now(timezone.utc).isoformat()),)
+        )
+        await db.commit()
+
+
+async def _read_lock_state_applying_failsafe(db_path: str) -> tuple[bool, str]:
+    """(locked, redirect_to) as stored, applying the heartbeat failsafe.
+
+    Returns locked=False when the lock has outlived pktHub's last contact, and
+    clears the stored flag so /api/health reports the release back to the hub.
+    """
+    import aiosqlite, json, logging
+    from datetime import datetime, timezone
+
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT value FROM settings WHERE key='direct_ui_locked'") as cur:
+            row = await cur.fetchone()
+        # "is True", not bool(): a value that failed to decode comes back as the
+        # raw text, and bool("false") is True.
+        if not (row and _decode_setting(row[0]) is True):
+            return False, ""
+
+        async with db.execute("SELECT value FROM settings WHERE key='lock_heartbeat_at'") as cur:
+            hrow = await cur.fetchone()
+        beat = _decode_setting(hrow[0]) if hrow else None
+        # No heartbeat at all counts as expired — a lock we cannot date is a
+        # lock we cannot trust to still be wanted.
+        expired = True
+        if beat:
+            try:
+                last = datetime.fromisoformat(str(beat))
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                expired = (datetime.now(timezone.utc) - last).total_seconds() > _LOCK_HEARTBEAT_MAX_AGE
+            except ValueError:
+                pass
+
+        if expired:
+            logging.getLogger("pktwifi.main").warning(
+                "pktHub has not called in %ss — releasing the direct-access lock",
+                _LOCK_HEARTBEAT_MAX_AGE,
+            )
+            await db.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('direct_ui_locked', ?)",
+                (json.dumps(False),)
+            )
+            await db.commit()
+            return False, ""
+
+        async with db.execute("SELECT value FROM settings WHERE key='hub_redirect_url'") as cur:
+            rrow = await cur.fetchone()
+        # No target means nowhere to send anyone — the caller serves the app
+        # rather than bouncing users to a blank address.
+        return True, (str(_decode_setting(rrow[0]) or "") if rrow else "")
+
 
 @app.middleware("http")
 async def _direct_access_lock(request: Request, call_next):
@@ -191,9 +279,11 @@ async def _direct_access_lock(request: Request, call_next):
     to take the app off the network, and the lock is a convenience for hub
     operators rather than a security boundary — every route keeps its own auth.
     """
-    import aiosqlite, json, logging
+    import logging
     import secrets as _sec
-    from datetime import datetime, timezone
+    from time import monotonic
+
+    global _lock_state_cache, _lock_state_at, _last_heartbeat_at
 
     path = request.url.path
     if any(path == p or path.startswith(p) for p in _LOCK_ALLOW_PREFIXES):
@@ -202,57 +292,26 @@ async def _direct_access_lock(request: Request, call_next):
     redirect_to = ""
     try:
         cfg = get_settings()
-        # Every database touch finishes inside this block. Handing the request on
-        # from within it would keep one connection open for the whole downstream
-        # call, i.e. one per request in flight.
-        async with aiosqlite.connect(cfg.db_path) as db:
-            presented = request.headers.get("x-suite-token", "")
-            stored    = (cfg.suite_token or "").strip()
-            if presented and stored and _sec.compare_digest(presented, stored):
-                # pktHub itself, or a user it is proxying — never redirected, and
-                # its arrival is what keeps the lock alive.
-                await db.execute(
-                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('lock_heartbeat_at', ?)",
-                    (json.dumps(datetime.now(timezone.utc).isoformat()),)
-                )
-                await db.commit()
-            else:
-                async with db.execute("SELECT value FROM settings WHERE key='direct_ui_locked'") as cur:
-                    row = await cur.fetchone()
-                # "is True", not bool(): a value that failed to decode comes back
-                # as the raw text, and bool("false") is True.
-                if row and _decode_setting(row[0]) is True:
-                    async with db.execute("SELECT value FROM settings WHERE key='lock_heartbeat_at'") as cur:
-                        hrow = await cur.fetchone()
-                    beat = _decode_setting(hrow[0]) if hrow else None
-                    # No heartbeat at all counts as expired — a lock we cannot
-                    # date is a lock we cannot trust to still be wanted.
-                    expired = True
-                    if beat:
-                        try:
-                            last = datetime.fromisoformat(str(beat))
-                            if last.tzinfo is None:
-                                last = last.replace(tzinfo=timezone.utc)
-                            expired = (datetime.now(timezone.utc) - last).total_seconds() > _LOCK_HEARTBEAT_MAX_AGE
-                        except ValueError:
-                            pass
+        now = monotonic()
 
-                    if expired:
-                        logging.getLogger("pktwifi.main").warning(
-                            "pktHub has not called in %ss — releasing the direct-access lock",
-                            _LOCK_HEARTBEAT_MAX_AGE,
-                        )
-                        await db.execute(
-                            "INSERT OR REPLACE INTO settings (key, value) VALUES ('direct_ui_locked', ?)",
-                            (json.dumps(False),)
-                        )
-                        await db.commit()
-                    else:
-                        async with db.execute("SELECT value FROM settings WHERE key='hub_redirect_url'") as cur:
-                            rrow = await cur.fetchone()
-                        # No target means nowhere to send anyone — serve the app
-                        # rather than bouncing users to a blank address.
-                        redirect_to = str(_decode_setting(rrow[0]) or "") if rrow else ""
+        presented = request.headers.get("x-suite-token", "")
+        stored    = (cfg.suite_token or "").strip()
+
+        if presented and stored and _sec.compare_digest(presented, stored):
+            # pktHub itself, or a user it is proxying — never redirected, and
+            # its arrival is what keeps the lock alive. Nothing to read.
+            if now - _last_heartbeat_at >= _LOCK_HEARTBEAT_WRITE_EVERY:
+                await _touch_heartbeat(cfg.db_path)
+                _last_heartbeat_at = now
+            return await call_next(request)
+
+        if _lock_state_cache is None or (now - _lock_state_at) >= _LOCK_STATE_TTL:
+            _lock_state_cache = await _read_lock_state_applying_failsafe(cfg.db_path)
+            _lock_state_at = now
+
+        locked, target = _lock_state_cache
+        if locked:
+            redirect_to = target
     except Exception:
         logging.getLogger("pktwifi.main").exception("direct-access lock check failed")
 
@@ -307,30 +366,37 @@ async def health(request: Request):
     token-authenticated /api/suite/direct-access, and this endpoint is public —
     an unlocked app has no reason to publish the hub's address to every caller.
     """
-    import aiosqlite, json, logging
+    import aiosqlite, logging
     import secrets as _sec
-    from datetime import datetime, timezone
+    from time import monotonic
+
+    global _last_heartbeat_at
 
     locked = False
     try:
         cfg = get_settings()
+        presented = request.headers.get("x-suite-token", "")
+        stored    = (cfg.suite_token or "").strip()
+        if presented and stored and _sec.compare_digest(presented, stored):
+            # Same interval the middleware uses — the heartbeat only has to stay
+            # inside _LOCK_HEARTBEAT_MAX_AGE, and pktHub polls this frequently.
+            now = monotonic()
+            if now - _last_heartbeat_at >= _LOCK_HEARTBEAT_WRITE_EVERY:
+                await _touch_heartbeat(cfg.db_path)
+                _last_heartbeat_at = now
+
+        # The flag as stored, not the middleware's cached view: this is what
+        # pktHub reads to reconcile its own record, so it must be current — and
+        # it must not apply the failsafe's release, which is the middleware's to
+        # decide on a real request.
         async with aiosqlite.connect(cfg.db_path) as db:
             async with db.execute("SELECT value FROM settings WHERE key='direct_ui_locked'") as cur:
                 row = await cur.fetchone()
-            locked = (_decode_setting(row[0]) is True) if row else False
-
-            presented = request.headers.get("x-suite-token", "")
-            stored    = (cfg.suite_token or "").strip()
-            if presented and stored and _sec.compare_digest(presented, stored):
-                await db.execute(
-                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('lock_heartbeat_at', ?)",
-                    (json.dumps(datetime.now(timezone.utc).isoformat()),)
-                )
-                await db.commit()
+        locked = (_decode_setting(row[0]) is True) if row else False
     except Exception:
         logging.getLogger("pktwifi.main").exception("health lock state read failed")
 
-    return {"status": "ok", "version": "0.1.0", "direct_ui_locked": locked}
+    return {"status": "ok", "version": get_version(), "direct_ui_locked": locked}
 
 # -- Serve React frontend (production build) ---------------------------------------
 _frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
@@ -371,20 +437,28 @@ if _frontend_dist.exists():
             headers={"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"},
         )
         # pktHub suite-token bootstrap — set sso cookies so React logs in automatically
-        _cfg = settings
+        import secrets as _secrets
+        # get_settings(), not the module-level `settings`: a token regenerated
+        # since startup must be the one this compares against.
+        _cfg = get_settings()
         _suite_tk = request.headers.get("x-suite-token", "")
-        if _suite_tk and _cfg.suite_token and _suite_tk == _cfg.suite_token:
+        _stored   = (_cfg.suite_token or "").strip()
+        # compare_digest, matching the middleware and /api/health — this decides
+        # whether to mint a signed session, so it is exactly the comparison that
+        # should not leak its answer through timing.
+        if _suite_tk and _stored and _secrets.compare_digest(_suite_tk, _stored):
             from datetime import datetime, timedelta, timezone
             from jose import jwt as _jose_jwt
-            from app.dependencies import _SUITE_ROLE_MAP
+            from app.dependencies import _SUITE_ROLE_MAP, cookie_secure
             _hub_user = request.headers.get("x-suite-user", "hub_user")
             _hub_role = request.headers.get("x-suite-role", "viewer")
             _local_role = _SUITE_ROLE_MAP.get(_hub_role, "viewer")
             _expire = datetime.now(tz=timezone.utc) + timedelta(hours=8)
             _payload = {"sub": "0", "role": _local_role, "exp": _expire, "type": "access"}
             _jwt = _jose_jwt.encode(_payload, _cfg.secret_key, algorithm=_cfg.algorithm)
-            response.set_cookie("sso_access_token", _jwt,       max_age=60, httponly=False, samesite="lax")
-            response.set_cookie("sso_role",         _local_role, max_age=60, httponly=False, samesite="lax")
+            _secure = cookie_secure(request)
+            response.set_cookie("sso_access_token", _jwt,       max_age=60, httponly=False, samesite="lax", secure=_secure)
+            response.set_cookie("sso_role",         _local_role, max_age=60, httponly=False, samesite="lax", secure=_secure)
         return response
 
 

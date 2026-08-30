@@ -26,11 +26,25 @@ log = logging.getLogger("pktwifi.integrations")
 
 
 class SuiteClient:
-    def __init__(self, base_url: str, suite_token: str, suite_user: str = "pktwifi", suite_role: str = "admin"):
+    """
+    suite_role is what the sibling app enforces its own permissions against, so
+    it must be the role of the person whose request this is — not a constant.
+    It used to default to "admin", which meant a pktWiFi viewer asking for
+    pktLog syslogs or a pktIPAM lookup arrived there as an administrator, and
+    the sibling's role check had nothing left to decide. It defaults to the
+    least privilege instead; every caller passes the real role explicitly.
+
+    suite_user is the identity the sibling records in its audit trail, so it
+    takes the same treatment: "who at pktWiFi asked", not just "pktWiFi".
+    """
+
+    def __init__(self, base_url: str, suite_token: str, suite_user: str = "pktwifi",
+                 suite_role: str = "viewer", verify_tls: bool = True):
         self.base_url = base_url.rstrip("/")
         self.suite_token = suite_token
         self.suite_user = suite_user
         self.suite_role = suite_role
+        self.verify_tls = verify_tls
 
     def _headers(self) -> dict:
         return {
@@ -40,7 +54,13 @@ class SuiteClient:
         }
 
     async def get(self, path: str, params: Optional[dict] = None) -> Any:
-        async with httpx.AsyncClient(timeout=15, verify=False) as client:
+        # Every one of these requests carries the sibling's suite token in a
+        # header, which is that app's whole credential. This was verify=False
+        # unconditionally, so anything on the path could present a certificate
+        # and collect it. On-prem siblings do often run a self-signed cert, so
+        # the escape hatch stays — but per connection, set deliberately by an
+        # admin, rather than as the behaviour of every call.
+        async with httpx.AsyncClient(timeout=15, verify=self.verify_tls) as client:
             resp = await client.get(f"{self.base_url}{path}", headers=self._headers(), params=params)
             resp.raise_for_status()
             return resp.json()
@@ -61,6 +81,12 @@ class SuiteClient:
                 return False, "reachable, but suite token was rejected — check the token"
             return False, f"HTTP {exc.response.status_code}"
         except httpx.ConnectError as exc:
+            # httpx wraps certificate failures in ConnectError, where they read
+            # as a generic connection problem. Name it — the fix is a checkbox
+            # on this form, and nothing else in the message points at it.
+            if "certificate" in str(exc).lower() or "ssl" in str(exc).lower():
+                return False, (f"TLS certificate was not trusted: {exc} — if this app uses a "
+                               "self-signed certificate, untick 'Verify TLS certificate'")
             return False, f"could not connect to host/port: {exc}"
         except httpx.TimeoutException:
             return False, "connection timed out"

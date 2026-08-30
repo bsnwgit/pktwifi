@@ -1,0 +1,12 @@
+-- Which notification channels a firing rule dispatches to, as a JSON array of
+-- channel names ("slack", "email", "pagerduty", "webhook", "tracecat").
+--
+-- Settings -> Notifications has always been able to configure and test all
+-- five, and the documentation described enabling a channel there as only
+-- making it "available to alert rules" — but no column ever recorded which
+-- rule used which, and the engine never dispatched anything. This is the
+-- missing half: the per-rule selection the rest of that design assumed.
+--
+-- Default '[]' rather than every channel: existing rules have been firing
+-- silently, and a migration is the wrong moment to start paging someone.
+ALTER TABLE alert_rules ADD COLUMN channels TEXT NOT NULL DEFAULT '[]';

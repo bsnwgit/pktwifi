@@ -75,6 +75,22 @@ async def require_analyst(user: Annotated[dict, Depends(get_current_user)]) -> d
     return user
 
 
+def cookie_secure(request: Request) -> bool:
+    """Whether a cookie set on this response should carry the Secure flag.
+
+    True whenever the browser actually reached us over TLS — directly, or via a
+    proxy that terminated it and said so. Deliberately not unconditional: a
+    Secure cookie on a plain-HTTP install is discarded by the browser silently,
+    which would break login outright on every deployment without a certificate.
+    Reading X-Forwarded-Proto fails closed — a spoofed value only ever adds the
+    flag, and the browser then declines to send that cookie back over HTTP.
+    """
+    if request.url.scheme == "https":
+        return True
+    forwarded = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    return forwarded.lower() == "https"
+
+
 async def require_suite_token(request: Request) -> None:
     """
     Gate for endpoints that are embedded unauthenticated (e.g. pktHub NOC

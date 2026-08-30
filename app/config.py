@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
+from time import monotonic
 from typing import Literal, Optional
 
 import yaml
@@ -172,30 +173,63 @@ def _validate_secrets(s: "Settings") -> None:
 
 
 @lru_cache
-def get_settings() -> Settings:
+def _base_settings() -> Settings:
+    """Startup config, read once. Everything this reads — environment,
+    config.yaml, .env — is fixed for the life of the process, so constructing
+    Settings() again per call only re-reads the same files off disk."""
     s = Settings()
     _validate_secrets(s)
     return s
 
 
-# suite_token_from_sqlite_patch — reads token from SQLite so /api/suite/register
-# takes effect immediately without service restart.
-_patched_get_settings = get_settings  # noqa: save original if it exists
+# suite_token is the one field that must not be read once and kept: it is
+# rewritten by /api/suite/register and /api/suite/regenerate, and the new value
+# has to take effect without a service restart. Re-reading SQLite on every call
+# did achieve that — but get_settings() runs at least twice per request (the
+# auth dependency, then the Managed-mode middleware), sqlite3 is synchronous,
+# and FastAPI calls both from the event loop. Every request was therefore
+# opening and closing a database on the loop thread and blocking every other
+# request in flight while it did.
+#
+# Cache the resolved Settings instead and let the token's writers invalidate
+# it. The TTL is the backstop for a writer this module doesn't know about (a
+# restored backup, a hand-edited row) — without it, such a write would not be
+# seen until the process restarted, which is the behaviour this indirection
+# exists to avoid.
+_TOKEN_TTL_SECONDS = 5.0
 
-def get_settings() -> Settings:  # type: ignore[misc]
-    s = Settings()
-    _validate_secrets(s)
+_cached: Optional[Settings] = None
+_cached_at: float = 0.0
+
+
+def invalidate_settings_cache() -> None:
+    """Drop the cached suite token, so the next read picks up a new one."""
+    global _cached
+    _cached = None
+
+
+def get_settings() -> Settings:
+    global _cached, _cached_at
+
+    now = monotonic()
+    if _cached is not None and (now - _cached_at) < _TOKEN_TTL_SECONDS:
+        return _cached
+
+    s = _base_settings()
     try:
         import sqlite3 as _sq, json as _j
-        _db_path = s.db_path
-        _conn = _sq.connect(_db_path)
+        _conn = _sq.connect(s.db_path)
         _row = _conn.execute("SELECT value FROM settings WHERE key='suite_token'").fetchone()
         _conn.close()
         if _row and _row[0]:
             _val = _row[0]
             _tok = _j.loads(_val) if _val.startswith('"') else _val
             if _tok:
+                # model_copy, not mutation — _base_settings() hands back the one
+                # shared instance and it must stay as config.yaml wrote it.
                 s = s.model_copy(update={'suite_token': _tok})
     except Exception:
         pass
+
+    _cached, _cached_at = s, now
     return s

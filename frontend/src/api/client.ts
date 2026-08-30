@@ -528,6 +528,8 @@ export interface MetricPoint {
 
 export type AlertConditionType = 'ap_down' | 'high_channel_util' | 'low_snr' | 'high_retry_rate' | 'high_client_count' | 'rogue_ap'
 
+export type NotifyChannel = 'slack' | 'email' | 'pagerduty' | 'webhook' | 'tracecat'
+
 export interface AlertRule {
   id: number
   name: string
@@ -536,6 +538,9 @@ export interface AlertRule {
   severity: 'info' | 'warning' | 'critical'
   enabled: boolean
   created_at: string
+  // Channels this rule notifies on when it fires. Empty means it records the
+  // event on the Alerts page and pages no one.
+  channels: NotifyChannel[]
 }
 
 export interface AlertEvent {
@@ -694,6 +699,7 @@ export interface Integration {
   base_url: string
   has_token: boolean
   enabled: boolean
+  verify_tls: boolean
   health_status: string
   last_health_check: string | null
 }
@@ -704,4 +710,5 @@ export interface IntegrationInput {
   base_url: string
   suite_token: string
   enabled?: boolean
+  verify_tls?: boolean
 }

@@ -84,6 +84,10 @@ async def create_collector(body: CollectorRequest, user: AdminUser, db: aiosqlit
 
 @router.patch("/{collector_id}")
 async def update_collector(collector_id: int, body: CollectorRequest, user: AdminUser, db: aiosqlite.Connection = Depends(get_db)):
+    # Same check create does. Without it an edit could set a type no plugin
+    # answers to, which the poll engine can only refuse.
+    if body.collector_type not in COLLECTOR_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown collector_type '{body.collector_type}'")
     async with db.execute("SELECT id FROM collectors WHERE id = ?", (collector_id,)) as cur:
         if not await cur.fetchone():
             raise HTTPException(status_code=404, detail="Collector not found")

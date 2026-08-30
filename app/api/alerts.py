@@ -3,10 +3,13 @@
 """
 from __future__ import annotations
 
+import json
+
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.alerts.notify import CHANNELS
 from app.database import get_db
 from app.dependencies import CurrentUser, AnalystUser, AdminUser
 
@@ -24,13 +27,34 @@ class RuleRequest(BaseModel):
     threshold: float | None = None
     severity: str = "warning"
     enabled: bool = True
+    # Which of the Settings -> Notifications channels this rule dispatches to.
+    # Empty means the rule still records events on the Alerts page and simply
+    # doesn't page anyone — which is what every rule did before the engine
+    # gained a dispatch path at all.
+    channels: list[str] = []
+
+
+def _clean_channels(channels: list[str]) -> str:
+    """Validated, de-duplicated, order-preserved, ready to store."""
+    seen: list[str] = []
+    for c in channels:
+        if c not in CHANNELS:
+            raise HTTPException(status_code=400, detail=f"channels must be a subset of {sorted(CHANNELS)}")
+        if c not in seen:
+            seen.append(c)
+    return json.dumps(seen)
 
 
 def _rule_out(r) -> dict:
+    try:
+        channels = json.loads(r["channels"] or "[]")
+    except (ValueError, TypeError, IndexError, KeyError):
+        channels = []
     return {
         "id": r["id"], "name": r["name"], "condition_type": r["condition_type"],
         "threshold": r["threshold"], "severity": r["severity"],
         "enabled": bool(r["enabled"]), "created_at": r["created_at"],
+        "channels": channels if isinstance(channels, list) else [],
     }
 
 
@@ -59,9 +83,10 @@ async def create_rule(body: RuleRequest, user: AdminUser, db: aiosqlite.Connecti
     if body.condition_type not in _CONDITION_TYPES:
         raise HTTPException(status_code=400, detail=f"condition_type must be one of {sorted(_CONDITION_TYPES)}")
     cur = await db.execute(
-        """INSERT INTO alert_rules (name, condition_type, threshold, severity, enabled)
-           VALUES (?, ?, ?, ?, ?) RETURNING *""",
-        (body.name, body.condition_type, body.threshold, body.severity, int(body.enabled)),
+        """INSERT INTO alert_rules (name, condition_type, threshold, severity, enabled, channels)
+           VALUES (?, ?, ?, ?, ?, ?) RETURNING *""",
+        (body.name, body.condition_type, body.threshold, body.severity, int(body.enabled),
+         _clean_channels(body.channels)),
     )
     row = await cur.fetchone()
     await db.commit()
@@ -70,13 +95,16 @@ async def create_rule(body: RuleRequest, user: AdminUser, db: aiosqlite.Connecti
 
 @router.patch("/rules/{rule_id}")
 async def update_rule(rule_id: int, body: RuleRequest, user: AdminUser, db: aiosqlite.Connection = Depends(get_db)):
+    if body.condition_type not in _CONDITION_TYPES:
+        raise HTTPException(status_code=400, detail=f"condition_type must be one of {sorted(_CONDITION_TYPES)}")
     async with db.execute("SELECT id FROM alert_rules WHERE id = ?", (rule_id,)) as cur:
         if not await cur.fetchone():
             raise HTTPException(status_code=404, detail="Rule not found")
     await db.execute(
-        """UPDATE alert_rules SET name = ?, condition_type = ?, threshold = ?, severity = ?, enabled = ?
-           WHERE id = ?""",
-        (body.name, body.condition_type, body.threshold, body.severity, int(body.enabled), rule_id),
+        """UPDATE alert_rules SET name = ?, condition_type = ?, threshold = ?, severity = ?,
+           enabled = ?, channels = ? WHERE id = ?""",
+        (body.name, body.condition_type, body.threshold, body.severity, int(body.enabled),
+         _clean_channels(body.channels), rule_id),
     )
     await db.commit()
     async with db.execute("SELECT * FROM alert_rules WHERE id = ?", (rule_id,)) as cur:
