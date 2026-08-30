@@ -8,7 +8,6 @@ Settings page grouped by section.
 """
 from __future__ import annotations
 
-import logging
 import json
 from typing import Any
 
@@ -16,10 +15,9 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.alerts import notify
 from app.database import get_db
 from app.dependencies import CurrentUser, AdminUser
-
-log = logging.getLogger("pktwifi.settings")
 
 router = APIRouter()
 
@@ -28,12 +26,24 @@ router = APIRouter()
 _MASK = "••••••••"
 
 # Keys that must never be echoed back verbatim to non-admin callers.
+#
+# A webhook URL is not merely a destination — for Slack, TraceCat and most
+# generic receivers, possession of the URL is the whole authorisation to post,
+# so it belongs here alongside the tokens. The Settings UI already renders the
+# Slack one as a secret field; GET /api/settings was handing the same value to
+# any signed-in viewer in plaintext. notify_webhook_headers is here for the
+# same reason: it is where an Authorization header for the receiver is kept.
 _SECRET_KEYS = {
     "okta_saml_sp_key",
     "lucid_api_token",
     "notify_email_password",
+    "notify_email_username",
     "notify_pagerduty_integration_key",
+    "notify_slack_webhook_url",
     "notify_tracecat_api_token",
+    "notify_tracecat_webhook_url",
+    "notify_webhook_url",
+    "notify_webhook_headers",
     "suite_token",
     "resonance_key",
 }
@@ -126,150 +136,24 @@ async def test_notification(
     _: AdminUser,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    """Send a test notification on the specified channel using saved settings."""
-    channel = body.channel
-    valid = {"slack", "email", "pagerduty", "webhook", "tracecat"}
-    if channel not in valid:
-        raise HTTPException(status_code=400, detail=f"Unknown channel: {channel}. Valid: {sorted(valid)}")
+    """Send a test notification on the specified channel using saved settings.
 
-    async def _get(key: str):
-        async with db.execute("SELECT value FROM settings WHERE key=?", (key,)) as cur:
-            row = await cur.fetchone()
-        return json.loads(row[0]) if row else None
+    Goes through the same app/alerts/notify.py path a firing rule takes, so a
+    passing test now means the channel will actually carry an alert. This
+    endpoint used to hold its own copy of all five channels — the only copy
+    that existed, since the engine never dispatched at all, which is exactly
+    how a channel could test green and stay silent forever.
+    """
+    if body.channel not in notify.CHANNELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown channel: {body.channel}. Valid: {sorted(notify.CHANNELS)}",
+        )
 
-    TEST_RULE = "pktWiFi Test"
-    TEST_MSG  = "pktWiFi test notification — your configuration is working correctly."
-    TEST_SEV  = "info"
-
-    try:
-        if channel == "slack":
-            enabled = await _get("notify_slack_enabled")
-            if not enabled:
-                return {"status": "skipped", "detail": "Slack is not enabled"}
-            url = await _get("notify_slack_webhook_url") or ""
-            if not url:
-                return {"status": "skipped", "detail": "No webhook URL configured"}
-            import httpx
-            payload = {"text": f":white_circle: *pktWiFi Test — {TEST_RULE}*\n{TEST_MSG}"}
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(url, json=payload, timeout=10)
-            if resp.status_code == 200:
-                return {"status": "sent", "detail": "Slack message delivered"}
-            return {"status": "failed", "detail": f"Slack returned HTTP {resp.status_code}: {resp.text[:200]}"}
-
-        elif channel == "email":
-            enabled = await _get("notify_email_enabled")
-            if not enabled:
-                return {"status": "skipped", "detail": "Email is not enabled"}
-            host      = await _get("notify_email_smtp_host")   or ""
-            port      = await _get("notify_email_smtp_port")   or 587
-            tls       = await _get("notify_email_smtp_tls")
-            use_tls   = tls if tls is not None else True
-            username  = await _get("notify_email_username")    or ""
-            password  = await _get("notify_email_password")    or ""
-            from_addr = await _get("notify_email_from")        or "pktwifi@localhost"
-            to_addrs  = await _get("notify_email_default_to")  or []
-            if not host or not to_addrs:
-                return {"status": "skipped", "detail": "SMTP host or recipient list not configured"}
-            import aiosmtplib
-            from email.mime.text import MIMEText
-            from email.mime.multipart import MIMEMultipart
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = f"[pktWiFi Test] {TEST_RULE}"
-            msg["From"]    = from_addr
-            msg["To"]      = ", ".join(to_addrs)
-            msg.attach(MIMEText(f"pktWiFi Test Notification\n\n{TEST_MSG}", "plain"))
-            await aiosmtplib.send(
-                msg,
-                hostname=host, port=int(port), use_tls=bool(use_tls),
-                username=username or None, password=password or None,
-            )
-            return {"status": "sent", "detail": f"Email sent to {', '.join(to_addrs)}"}
-
-        elif channel == "pagerduty":
-            enabled = await _get("notify_pagerduty_enabled")
-            if not enabled:
-                return {"status": "skipped", "detail": "PagerDuty is not enabled"}
-            key = await _get("notify_pagerduty_integration_key") or ""
-            if not key:
-                return {"status": "skipped", "detail": "No integration key configured"}
-            import httpx
-            payload = {
-                "routing_key": key,
-                "event_action": "trigger",
-                "payload": {
-                    "summary": f"[pktWiFi Test] {TEST_RULE}: {TEST_MSG}",
-                    "severity": "info",
-                    "source": "pktwifi",
-                },
-            }
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "https://events.pagerduty.com/v2/enqueue", json=payload, timeout=10
-                )
-            if resp.status_code in (200, 202):
-                return {"status": "sent", "detail": "PagerDuty event triggered"}
-            return {"status": "failed", "detail": f"PagerDuty returned HTTP {resp.status_code}: {resp.text[:200]}"}
-
-        elif channel == "webhook":
-            enabled = await _get("notify_webhook_enabled")
-            if not enabled:
-                return {"status": "skipped", "detail": "Webhook is not enabled"}
-            url      = await _get("notify_webhook_url")              or ""
-            method   = await _get("notify_webhook_method")           or "POST"
-            template = await _get("notify_webhook_payload_template") or ""
-            headers  = await _get("notify_webhook_headers")          or {}
-            if not url:
-                return {"status": "skipped", "detail": "No webhook URL configured"}
-            try:
-                from jinja2 import Template
-                from datetime import datetime, timezone
-                rendered = Template(template).render(
-                    alert_name=TEST_RULE, message=TEST_MSG,
-                    severity=TEST_SEV, fired_at=datetime.now(tz=timezone.utc).isoformat(),
-                )
-                body_json = json.loads(rendered)
-            except Exception as e:
-                return {"status": "failed", "detail": f"Template render error: {e}"}
-            import httpx
-            async with httpx.AsyncClient() as client:
-                resp = await client.request(
-                    method.upper(), url, json=body_json, headers=headers, timeout=10
-                )
-            if resp.status_code < 300:
-                return {"status": "sent", "detail": f"Webhook returned HTTP {resp.status_code}"}
-            return {"status": "failed", "detail": f"Webhook returned HTTP {resp.status_code}: {resp.text[:200]}"}
-
-        elif channel == "tracecat":
-            enabled = await _get("notify_tracecat_enabled")
-            if not enabled:
-                return {"status": "skipped", "detail": "TraceCat is not enabled"}
-            webhook_url = await _get("notify_tracecat_webhook_url") or ""
-            api_token   = await _get("notify_tracecat_api_token")   or ""
-            if not webhook_url:
-                return {"status": "skipped", "detail": "No webhook URL configured"}
-            from datetime import datetime, timezone
-            payload = {
-                "source": "pktwifi",
-                "event_id": 0,
-                "alert_name": TEST_RULE,
-                "severity": TEST_SEV,
-                "message": TEST_MSG,
-                "fired_at": datetime.now(tz=timezone.utc).isoformat(),
-                "details": {"test": True},
-            }
-            headers: dict = {"Content-Type": "application/json"}
-            if api_token:
-                headers["Authorization"] = f"Bearer {api_token}"
-            import httpx
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(webhook_url, json=payload, headers=headers, timeout=10)
-            if resp.status_code < 300:
-                return {"status": "sent", "detail": f"TraceCat webhook returned HTTP {resp.status_code}"}
-            return {"status": "failed", "detail": f"TraceCat returned HTTP {resp.status_code}: {resp.text[:200]}"}
-
-    except Exception:
-
-        log.exception("provider test call failed")
-
-        return {"status": "failed", "detail": "Request failed — see the app log for detail"}
+    alert = notify.AlertPayload(
+        alert_name="pktWiFi Test",
+        message="pktWiFi test notification — your configuration is working correctly.",
+        severity="info",
+    )
+    result = await notify.send(db, body.channel, alert)
+    return {"status": result.status, "detail": result.detail}

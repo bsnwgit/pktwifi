@@ -67,7 +67,11 @@ Cisco Meraki is built against the documented API v1 shape but not yet verified a
 
 ## Alerting & Notifications
 
-Configure channels on the Notifications tab (Slack, Email/SMTP, PagerDuty, generic Webhook, TraceCat SOAR) — enabling a channel doesn't send anything on its own, it just makes it available to alert rules. **Send Test** performs a real dispatch with the currently filled-in (even unsaved) config.
+Configure channels on the Notifications tab (Slack, Email/SMTP, PagerDuty, generic Webhook, TraceCat SOAR) — enabling a channel doesn't send anything on its own, it just makes it available to alert rules. **Send Test** performs a real dispatch through the same code path a firing rule uses.
+
+Then pick the channels per rule, under **Alerts → Rules → Notify on**. A rule with no channels selected still records its firings on the Alerts page and notifies nobody — which is what every rule did before, so check your existing rules after upgrading if you expect them to page.
+
+A notification is sent when an alert *opens*, not on every 30-second evaluation while it stays open, and not when it auto-resolves. One rule sends at most 10 notifications per pass: a controller going away takes every access point behind it with it, and that is one incident rather than a hundred pages. Anything over that ceiling is written to the application log naming the rule and the count, and every event is still recorded in full on the Alerts page.
 
 ## Storage & retention
 
@@ -101,6 +105,8 @@ For an install with no pktHub in front of it, the address can be set directly wi
 Both directions live on Settings → Security → Suite Integration:
 - **Inbound**: copy the Suite Token, register pktWiFi in pktHub's App Manager so it can proxy in with users already signed in.
 - **Outbound (Sibling pkt Apps)**: connect to pktsnmp/pktflow/pktlog/pktpcap/pktipam for cross-app IP lookups and integrations. Note pktIPAM doesn't yet have its own dedicated client module here (`app/integrations/`) the way the others do, even though it's selectable in the UI.
+
+  **Verify TLS certificate** is on for new connections and off for any that predate the option — those were configured against a client that never verified, so switching them over silently would break them. Tick it once the sibling's certificate is trusted; every call carries that app's suite token, and an unverified HTTPS connection lets anything on the path collect it.
 
 ## Known gaps worth knowing about
 

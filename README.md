@@ -562,9 +562,18 @@ from/default-recipients), **PagerDuty** (Events API v2 integration key),
 a generic **Webhook** (URL, POST/PUT, Jinja2 payload template with
 `alert_name`/`message`/`severity`/`fired_at` variables), and **TraceCat
 SOAR** (workflow webhook URL + optional bearer token). Enabling a channel
-here only makes it available — an alert rule still has to be configured to
-use it. Each channel has a **Send Test** button that performs a real
-dispatch (actual Slack post, actual SMTP send, etc.), not a dry run.
+here only makes it available — each rule then selects the channels it uses
+under **Alerts -> Rules -> Notify on**, and a rule with none selected
+records its firings without notifying anyone. Each channel has a **Send
+Test** button that performs a real dispatch (actual Slack post, actual SMTP
+send, etc.), not a dry run, through the same `app/alerts/notify.py` path a
+firing rule takes.
+
+Dispatch happens when an alert *opens* — not repeatedly while it stays open,
+and not when it auto-resolves. One rule sends at most ten notifications per
+evaluation pass, so a controller taking every access point behind it offline
+reads as one incident rather than a hundred pages; the overflow is logged
+with the rule name and count, and the Alerts page still lists every event.
 
 ---
 
@@ -642,6 +651,20 @@ sites), each with its own name/app/base URL/token
    base URL and token.
 3. Click **Test Connection** to confirm reachability (this also refreshes
    the connection's health status shown in the list).
+
+**Verify TLS certificate** is on for any connection added from here. Every
+call carries that sibling's suite token in a header, so an unverified HTTPS
+connection lets anything on the path present a certificate and collect it.
+Turn it off only for an on-prem sibling behind a self-signed certificate.
+Connections that predate this option keep verification off — they were
+configured and tested against a client that never verified, and switching
+them over silently would break them with a certificate error; tick the box
+on each once its certificate is trusted.
+
+Each call also presents the *asking user's* own role and username to the
+sibling (`X-Suite-Role` / `X-Suite-User`), so the sibling applies its own
+permissions to the real person and records them in its audit trail rather
+than seeing every request as an anonymous administrator.
 
 Deleting a connection here isn't destructive to the sibling app — anything
 in pktWiFi that depended on it (e.g. AP inventory context from pktsnmp,

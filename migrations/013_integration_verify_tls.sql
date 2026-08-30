@@ -1,0 +1,13 @@
+-- Whether to verify the TLS certificate when calling this sibling pkt* app.
+--
+-- These calls carry the sibling's suite token in a header, and the client used
+-- to pass verify=False unconditionally — so anything on the path could present
+-- a certificate and collect that token. Verification is now the default for a
+-- newly added connection.
+--
+-- Default 0 here, deliberately: an on-prem sibling behind a self-signed cert is
+-- the common case, and every connection that already exists was configured and
+-- tested against verify=False. Turning it on underneath them would break
+-- working integrations on upgrade with a certificate error. New connections
+-- come from app/api/integrations.py, which defaults the field to on.
+ALTER TABLE integrations ADD COLUMN verify_tls INTEGER NOT NULL DEFAULT 0;

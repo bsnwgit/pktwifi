@@ -334,6 +334,16 @@ class PollEngine:
             return
         collector = get_collector_instance(row["collector_type"], config)
         if collector is None:
+            # Record it and stamp last_poll_at. Returning bare left the row
+            # permanently "due" — every 15-second tick picked it up again,
+            # re-resolved its credential, and returned here, with nothing on the
+            # Collectors page to say why it never polled.
+            log.warning(f"Collector '{row['name']}' has unknown type '{row['collector_type']}'")
+            await db.execute(
+                "UPDATE collectors SET status = 'error', last_error = ?, last_poll_at = datetime('now') WHERE id = ?",
+                (f"Unknown collector type '{row['collector_type']}'", row["id"]),
+            )
+            await db.commit()
             return
         try:
             result = await collector.poll()

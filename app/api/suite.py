@@ -20,6 +20,7 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from app.config import invalidate_settings_cache
 from app.dependencies import AdminUser, CurrentUser
 
 log = logging.getLogger("pktwifi.api.suite")
@@ -44,6 +45,7 @@ async def get_suite_token(request: Request, user: AdminUser):
                     (json.dumps(new_token),)
                 )
                 await db.commit()
+            invalidate_settings_cache()
             token = new_token
         except Exception:
             pass
@@ -76,6 +78,7 @@ async def suite_register(request: Request, user: AdminUser):
                 (json.dumps(new_token),)
             )
             await db.commit()
+        invalidate_settings_cache()
         return JSONResponse({"status": "ok"})
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -99,6 +102,7 @@ async def regenerate_suite_token(request: Request, user: AdminUser):
                 (json.dumps(new_token),)
             )
             await db.commit()
+        invalidate_settings_cache()
         return JSONResponse({"suite_token": new_token, "status": "regenerated"})
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -115,6 +119,14 @@ async def set_settings_lock(request: Request, user: CurrentUser):
     """
     from app.config import get_settings
     import aiosqlite
+
+    # pktHub is the intended caller and reaches this with the suite token,
+    # whatever role it names itself as. Everyone else has to be a local admin:
+    # this flag disables local editing of every setting, and a plain
+    # CurrentUser gate let any signed-in viewer set or clear it.
+    if not user.get("_via_suite") and user["role"] != "admin":
+        return JSONResponse({"error": "Admin role required"}, status_code=403)
+
     try:
         body = await request.json()
     except Exception:
@@ -267,6 +279,12 @@ async def set_direct_access(request: Request):
                     (json.dumps(redirect_url),)
                 )
             await db.commit()
+        # The middleware holds the lock state briefly between reads; drop it so
+        # this takes effect on the very next request rather than a few seconds
+        # later. Imported here, not at module scope — app.main imports this
+        # router, so the other direction can only be a local import.
+        from app.main import invalidate_lock_cache
+        invalidate_lock_cache()
         return JSONResponse({
             "status": "ok",
             "direct_ui_locked": locked,
@@ -282,12 +300,17 @@ async def set_direct_access(request: Request):
 @router.get("/mode")
 async def get_mode():
     """
-    Lock state, unauthenticated. This app's own pages read it to explain why
-    they bounced the user to pktHub, and they hold no suite token. It exposes
-    nothing a locked-out visitor cannot already see from the redirect itself.
+    Lock state, unauthenticated — the flag only, never the redirect target.
+
+    /api/health withholds hub_redirect_url on exactly this reasoning: an
+    unlocked app has no business publishing the hub's address to every caller
+    that can reach the port. This route was returning it unconditionally, which
+    made it the disclosure /api/health was written to avoid. pktHub reads the
+    address from the token-authenticated /direct-access; nothing else needs it.
     """
     try:
-        return JSONResponse(await _read_lock_state())
+        state = await _read_lock_state()
+        return JSONResponse({"direct_ui_locked": state["direct_ui_locked"]})
     except Exception:
         log.exception("suite endpoint failed")
         return JSONResponse({"error": "Internal error"}, status_code=500)
@@ -326,6 +349,8 @@ async def set_hub_redirect_url(request: Request, user: AdminUser):
                 (json.dumps(url),)
             )
             await db.commit()
+        from app.main import invalidate_lock_cache
+        invalidate_lock_cache()
         return JSONResponse({"status": "ok", "hub_redirect_url": url})
     except Exception:
         # The exception text carries the database path and internal SQL, and

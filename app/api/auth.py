@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from app.auth.local import verify_password, create_access_token, create_refresh_token, decode_refresh_token
 from app.auth import saml as saml_auth
 from app.database import get_db
+from app.dependencies import cookie_secure
 
 router = APIRouter()
 
@@ -31,7 +32,7 @@ class TokenResponse(BaseModel):
 # -- Local auth ------------------------------------------------------------------
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, response: Response, db: aiosqlite.Connection = Depends(get_db)):
+async def login(body: LoginRequest, request: Request, response: Response, db: aiosqlite.Connection = Depends(get_db)):
     async with db.execute(
         "SELECT id, hashed_password, role, is_active FROM users WHERE username = ? OR email = ?",
         (body.username, body.username),
@@ -55,6 +56,7 @@ async def login(body: LoginRequest, response: Response, db: aiosqlite.Connection
         value=refresh_token,
         httponly=True,
         samesite="lax",
+        secure=cookie_secure(request),
         max_age=60 * 60 * 24 * 7,
     )
 
@@ -87,8 +89,10 @@ async def refresh_token(
 
 
 @router.post("/logout")
-async def logout(response: Response):
-    response.delete_cookie("refresh_token")
+async def logout(request: Request, response: Response):
+    # Same attributes it was set with — a Secure cookie is not reliably cleared
+    # by a Set-Cookie that omits the flag.
+    response.delete_cookie("refresh_token", httponly=True, samesite="lax", secure=cookie_secure(request))
     return {"message": "Logged out"}
 
 
@@ -114,7 +118,7 @@ async def auth_config(db: aiosqlite.Connection = Depends(get_db)):
 
 
 @router.post("/auto-login", response_model=TokenResponse)
-async def auto_login(response: Response, db: aiosqlite.Connection = Depends(get_db)):
+async def auto_login(request: Request, response: Response, db: aiosqlite.Connection = Depends(get_db)):
     """Issue a session for the default admin account when every auth method is disabled.
 
     Only usable when both local auth and SAML SSO are off — otherwise this would be
@@ -153,6 +157,7 @@ async def auto_login(response: Response, db: aiosqlite.Connection = Depends(get_
         value=refresh_token,
         httponly=True,
         samesite="lax",
+        secure=cookie_secure(request),
         max_age=60 * 60 * 24 * 7,
     )
     return TokenResponse(access_token=access_token, role=user["role"])
@@ -249,8 +254,9 @@ async def saml_callback(request: Request, db: aiosqlite.Connection = Depends(get
     access = create_access_token(user["id"], user["role"])
     refresh = create_refresh_token(user["id"])
 
+    secure = cookie_secure(request)
     resp = RedirectResponse(url="/", status_code=302)
-    resp.set_cookie(key="refresh_token", value=refresh, httponly=True, samesite="lax", max_age=60 * 60 * 24 * 7)
-    resp.set_cookie(key="sso_access_token", value=access, httponly=False, samesite="lax", max_age=60)
-    resp.set_cookie(key="sso_role", value=user["role"], httponly=False, samesite="lax", max_age=60)
+    resp.set_cookie(key="refresh_token", value=refresh, httponly=True, samesite="lax", secure=secure, max_age=60 * 60 * 24 * 7)
+    resp.set_cookie(key="sso_access_token", value=access, httponly=False, samesite="lax", secure=secure, max_age=60)
+    resp.set_cookie(key="sso_role", value=user["role"], httponly=False, samesite="lax", secure=secure, max_age=60)
     return resp

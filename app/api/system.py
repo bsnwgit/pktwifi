@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -302,7 +302,7 @@ async def export_bundle(body: ExportRequest, user: AdminUser):
 
     """Download a full backup bundle as a .tar.gz archive: pktwifi.db + config.yaml."""
     settings = get_settings()
-    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     filename = f"pktwifi-export-{date_str}.tar.gz"
 
     def _build_archive(out_path: Path) -> None:

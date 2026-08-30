@@ -64,66 +64,48 @@ class InternalIpInfoResult(BaseModel):
     arp_entries: list[dict] = []
 
 
-async def _get_user_key(username: str, provider: str) -> str:
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT api_key FROM user_api_keys WHERE username = ? AND provider = ?",
-            (username, provider),
-        ) as cur:
-            row = await cur.fetchone()
-    return decrypt_str(row[0]) if row else ""
+async def _load_providers(username: str) -> dict[str, dict]:
+    """Every provider row this user has, keyed by provider name.
 
-
-async def _get_ipinfo_enabled_fields(username: str) -> list[str] | None:
+    One query. This was six separate helpers, each opening and closing its own
+    SQLite connection and each called once per provider — eleven connections to
+    answer a single lookup, all of them on the event loop.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT enabled_fields FROM user_api_keys WHERE username = ? AND provider = 'ipinfo'",
+            "SELECT provider, api_key, enabled_fields, free_tier, enabled "
+            "FROM user_api_keys WHERE username = ?",
             (username,),
         ) as cur:
-            row = await cur.fetchone()
-    return json.loads(row[0]) if row and row[0] else None
+            return {r["provider"]: dict(r) for r in await cur.fetchall()}
 
 
-async def _get_ipapi_is_enabled_fields(username: str) -> list[str] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT enabled_fields FROM user_api_keys WHERE username = ? AND provider = 'ipapi_is'",
-            (username,),
-        ) as cur:
-            row = await cur.fetchone()
-    return json.loads(row[0]) if row and row[0] else None
+def _provider_key(rows: dict, provider: str) -> str:
+    row = rows.get(provider)
+    return decrypt_str(row["api_key"]) if row else ""
 
 
-async def _get_ipapi_is_free_tier(username: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT free_tier FROM user_api_keys WHERE username = ? AND provider = 'ipapi_is'",
-            (username,),
-        ) as cur:
-            row = await cur.fetchone()
-    return bool(row[0]) if row else False
+def _enabled_fields(rows: dict, provider: str) -> list[str] | None:
+    row = rows.get(provider)
+    if not row or not row["enabled_fields"]:
+        return None
+    try:
+        return json.loads(row["enabled_fields"])
+    except (ValueError, TypeError):
+        return None
 
 
-async def _get_mxtoolbox_enabled_fields(username: str) -> list[str] | None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT enabled_fields FROM user_api_keys WHERE username = ? AND provider = 'mxtoolbox'",
-            (username,),
-        ) as cur:
-            row = await cur.fetchone()
-    return json.loads(row[0]) if row and row[0] else None
-
-
-async def _get_provider_enabled(username: str, provider: str) -> bool:
+def _provider_enabled(rows: dict, provider: str) -> bool:
     """Whether to show this provider's section in the modal at all — no row
     yet means never configured/toggled, which defaults to shown."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT enabled FROM user_api_keys WHERE username = ? AND provider = ?",
-            (username, provider),
-        ) as cur:
-            row = await cur.fetchone()
-    return bool(row[0]) if row is not None else True
+    row = rows.get(provider)
+    return bool(row["enabled"]) if row is not None else True
+
+
+def _free_tier(rows: dict, provider: str) -> bool:
+    row = rows.get(provider)
+    return bool(row["free_tier"]) if row else False
 
 
 async def _fetch_ipinfo(client: httpx.AsyncClient, ip: str, key: str, result: IpInfoResult) -> None:
@@ -240,20 +222,21 @@ async def get_ip_info(ip: str, user: CurrentUser):
         raise HTTPException(status_code=400, detail="IP info lookup is only available for public addresses")
 
     result = IpInfoResult(ip=ip)
-    ipinfo_key = await _get_user_key(user["username"], "ipinfo")
-    ipapi_is_key = await _get_user_key(user["username"], "ipapi_is")
-    abuseipdb_key = await _get_user_key(user["username"], "abuseipdb")
-    mxtoolbox_key = await _get_user_key(user["username"], "mxtoolbox")
-    ipqualityscore_key = await _get_user_key(user["username"], "ipqualityscore")
-    result.ipinfo_enabled_fields = await _get_ipinfo_enabled_fields(user["username"])
-    result.ipapi_is_enabled_fields = await _get_ipapi_is_enabled_fields(user["username"])
-    result.mxtoolbox_enabled_fields = await _get_mxtoolbox_enabled_fields(user["username"])
-    ipapi_is_free_tier = await _get_ipapi_is_free_tier(user["username"])
-    result.ipinfo_enabled = await _get_provider_enabled(user["username"], "ipinfo")
-    result.ipapi_is_enabled = await _get_provider_enabled(user["username"], "ipapi_is")
-    result.abuseipdb_enabled = await _get_provider_enabled(user["username"], "abuseipdb")
-    result.mxtoolbox_enabled = await _get_provider_enabled(user["username"], "mxtoolbox")
-    result.ipqualityscore_enabled = await _get_provider_enabled(user["username"], "ipqualityscore")
+    providers = await _load_providers(user["username"])
+    ipinfo_key = _provider_key(providers, "ipinfo")
+    ipapi_is_key = _provider_key(providers, "ipapi_is")
+    abuseipdb_key = _provider_key(providers, "abuseipdb")
+    mxtoolbox_key = _provider_key(providers, "mxtoolbox")
+    ipqualityscore_key = _provider_key(providers, "ipqualityscore")
+    result.ipinfo_enabled_fields = _enabled_fields(providers, "ipinfo")
+    result.ipapi_is_enabled_fields = _enabled_fields(providers, "ipapi_is")
+    result.mxtoolbox_enabled_fields = _enabled_fields(providers, "mxtoolbox")
+    ipapi_is_free_tier = _free_tier(providers, "ipapi_is")
+    result.ipinfo_enabled = _provider_enabled(providers, "ipinfo")
+    result.ipapi_is_enabled = _provider_enabled(providers, "ipapi_is")
+    result.abuseipdb_enabled = _provider_enabled(providers, "abuseipdb")
+    result.mxtoolbox_enabled = _provider_enabled(providers, "mxtoolbox")
+    result.ipqualityscore_enabled = _provider_enabled(providers, "ipqualityscore")
 
     async with httpx.AsyncClient(timeout=10) as client:
         tasks = []
@@ -297,7 +280,8 @@ async def get_internal_ip_info(ip: str, user: CurrentUser):
         return InternalIpInfoResult(ip=ip, configured=False, error="pktIPAM integration is not configured — add one in Settings → Integrations")
 
     client = SuiteClient(integration["base_url"], decrypt_str(integration["suite_token"]),
-                         suite_user="pktwifi", suite_role="admin")
+                         suite_user=user["username"], suite_role=user["role"],
+                         verify_tls=bool(integration["verify_tls"]))
     try:
         data = await client.get("/api/ip-addresses/lookup", params={"ip": ip})
     except httpx.HTTPStatusError as exc:

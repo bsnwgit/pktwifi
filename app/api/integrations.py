@@ -32,6 +32,10 @@ class IntegrationCreate(BaseModel):
     base_url: str
     suite_token: str
     enabled: bool = True
+    # On for anything added from here. Existing rows keep verification off (see
+    # migration 013) because they were configured and tested against a client
+    # that never verified, and turning it on under them breaks working setups.
+    verify_tls: bool = True
 
 
 class IntegrationUpdate(BaseModel):
@@ -39,12 +43,14 @@ class IntegrationUpdate(BaseModel):
     base_url: str | None = None
     suite_token: str | None = None
     enabled: bool | None = None
+    verify_tls: bool | None = None
 
 
 def _out(r) -> dict:
     return {
         "id": r["id"], "name": r["name"], "app_name": r["app_name"], "base_url": r["base_url"],
         "has_token": bool(r["suite_token"]), "enabled": bool(r["enabled"]),
+        "verify_tls": bool(r["verify_tls"]),
         "health_status": r["health_status"], "last_health_check": r["last_health_check"],
     }
 
@@ -62,10 +68,11 @@ async def create_integration(body: IntegrationCreate, user: AdminUser, db: aiosq
         raise HTTPException(status_code=400, detail=f"app_name must be one of {_APPS}")
     try:
         cur = await db.execute(
-            """INSERT INTO integrations (name, app_name, base_url, suite_token, enabled)
-               VALUES (?, ?, ?, ?, ?) RETURNING *""",
+            """INSERT INTO integrations (name, app_name, base_url, suite_token, enabled, verify_tls)
+               VALUES (?, ?, ?, ?, ?, ?) RETURNING *""",
             (body.name, body.app_name, body.base_url.rstrip("/"),
-             encrypt_str(body.suite_token) if body.suite_token else "", int(body.enabled)),
+             encrypt_str(body.suite_token) if body.suite_token else "", int(body.enabled),
+             int(body.verify_tls)),
         )
         row = await cur.fetchone()
         await db.commit()
@@ -93,8 +100,9 @@ async def update_integration(integration_id: int, body: IntegrationUpdate, user:
     try:
         await db.execute(
             """UPDATE integrations SET name = ?, base_url = ?, suite_token = ?, enabled = ?,
-               updated_at = datetime('now') WHERE id = ?""",
-            (existing["name"], existing["base_url"], existing["suite_token"], int(existing["enabled"]), integration_id),
+               verify_tls = ?, updated_at = datetime('now') WHERE id = ?""",
+            (existing["name"], existing["base_url"], existing["suite_token"], int(existing["enabled"]),
+             int(existing["verify_tls"]), integration_id),
         )
         await db.commit()
     except aiosqlite.IntegrityError:
@@ -117,7 +125,11 @@ async def test_integration(integration_id: int, user: AdminUser, db: aiosqlite.C
     if not row or not row["base_url"]:
         raise HTTPException(status_code=400, detail="Integration is not configured yet")
 
-    client = SuiteClient(row["base_url"], decrypt_str(row["suite_token"]), suite_user="pktwifi", suite_role="admin")
+    # Admin-only endpoint, and the caller really is one — so this is the one
+    # place "admin" is the honest role to present to the sibling.
+    client = SuiteClient(row["base_url"], decrypt_str(row["suite_token"]),
+                         suite_user=user["username"], suite_role="admin",
+                         verify_tls=bool(row["verify_tls"]))
     healthy, detail = await client.health_check()
     status_str = "ok" if healthy else "error"
     await db.execute(
@@ -136,10 +148,13 @@ async def pktsnmp_access_points(user: CurrentUser, db: aiosqlite.Connection = De
     several, so disable any that shouldn't serve this."""
     from app.integrations.pktsnmp_client import PktSnmpClient
     async with db.execute(
-        "SELECT base_url, suite_token FROM integrations WHERE app_name = 'pktsnmp' AND enabled = 1 ORDER BY name LIMIT 1"
+        "SELECT base_url, suite_token, verify_tls FROM integrations "
+        "WHERE app_name = 'pktsnmp' AND enabled = 1 ORDER BY name LIMIT 1"
     ) as cur:
         row = await cur.fetchone()
     if not row or not row["base_url"]:
         raise HTTPException(status_code=503, detail="pktsnmp integration is not configured")
-    client = PktSnmpClient(row["base_url"], decrypt_str(row["suite_token"]))
+    client = PktSnmpClient(row["base_url"], decrypt_str(row["suite_token"]),
+                           suite_user=user["username"], suite_role=user["role"],
+                           verify_tls=bool(row["verify_tls"]))
     return await client.get_devices()
