@@ -88,6 +88,16 @@ Upload a combined PFX/P12 bundle or separate PEM cert+key on Settings → Securi
 
 ## Suite Integration
 
+### Managed mode
+
+pktHub can put this app into **Managed mode**, which stops people reaching its UI directly and sends them to the hub instead. Nothing needs configuring here: the hub sends the address to redirect to when it applies the lock, because that address is built from the hub's own Base URL and this app's id in the hub's registry, and neither is visible from this side.
+
+The lock redirects rather than shuts down. Anything carrying a valid suite token passes through untouched, as do `/api/health`, `/api/suite/`, `/api/auth/` and the paths a hub-rendered page needs, so pktHub itself keeps working normally.
+
+**It expires on its own.** Every call from pktHub refreshes a heartbeat and the lock releases after five minutes without one, so it does not depend on the hub coming back — a lock only pktHub could lift would strand this app exactly when pktHub is what broke. `GET /api/suite/mode` reports the current state without authentication.
+
+For an install with no pktHub in front of it, the address can be set directly with `PATCH /api/suite/hub-redirect-url` (admin session; http/https only, since every visitor follows it while the lock is on). pktHub overwrites it whenever it applies a lock.
+
 Both directions live on Settings → Security → Suite Integration:
 - **Inbound**: copy the Suite Token, register pktWiFi in pktHub's App Manager so it can proxy in with users already signed in.
 - **Outbound (Sibling pkt Apps)**: connect to pktsnmp/pktflow/pktlog/pktpcap/pktipam for cross-app IP lookups and integrations. Note pktIPAM doesn't yet have its own dedicated client module here (`app/integrations/`) the way the others do, even though it's selectable in the UI.
