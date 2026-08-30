@@ -186,13 +186,19 @@ async def pktlog_syslogs(
     """Proxy AP/controller syslog entries from pktLog, if that integration is configured."""
     from app.integrations.pktlog_client import PktLogClient
     async with db.execute(
-        "SELECT base_url, suite_token FROM integrations WHERE app_name = 'pktlog' AND enabled = 1 ORDER BY name LIMIT 1"
+        "SELECT base_url, suite_token, verify_tls FROM integrations "
+        "WHERE app_name = 'pktlog' AND enabled = 1 ORDER BY name LIMIT 1"
     ) as cur:
         row = await cur.fetchone()
     if not row or not row["base_url"]:
         raise HTTPException(status_code=503, detail="pktLog integration is not configured")
 
-    client = PktLogClient(row["base_url"], decrypt_str(row["suite_token"]))
+    # The asking user's own identity and role, not a blanket "pktwifi"/admin —
+    # pktLog applies its own permissions to this, and its audit trail should
+    # name whoever actually went looking.
+    client = PktLogClient(row["base_url"], decrypt_str(row["suite_token"]),
+                          suite_user=user["username"], suite_role=user["role"],
+                          verify_tls=bool(row["verify_tls"]))
     return await client.get_wifi_logs(mac_address=mac_address, limit=limit)
 
 

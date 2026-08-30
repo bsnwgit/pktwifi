@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { api, AlertEvent, AlertRule, AlertConditionType } from '../api/client'
+import clsx from 'clsx'
+import { api, AlertEvent, AlertRule, AlertConditionType, NotifyChannel } from '../api/client'
 import HelpButton from '../components/HelpButton'
 
 // ── Time range ────────────────────────────────────────────────────────────────
@@ -244,17 +245,39 @@ function EventCard({ event, onAck }: { event: AlertEvent; onAck: (id: number) =>
 // ── Main page ─────────────────────────────────────────────────────────────────
 type Tab = 'active' | 'history' | 'rules'
 
+// Labels for the notification channels a rule can dispatch on. Configuring a
+// channel lives in Settings → Notifications; this is only which of them a given
+// rule uses, which is the half the engine reads.
+const CHANNEL_LABELS: Record<NotifyChannel, string> = {
+  slack:     'Slack',
+  email:     'Email',
+  pagerduty: 'PagerDuty',
+  webhook:   'Webhook',
+  tracecat:  'TraceCat',
+}
+
 function RuleModal({ rule, onClose, onSaved }: { rule?: AlertRule | null; onClose: () => void; onSaved: () => void }) {
   const editing = !!rule
+  // Annotated, not inferred: `rule?.channels ?? []` infers as
+  // `NotifyChannel[] | never[]`, and .includes() against that union narrows its
+  // own parameter to `never`.
+  const initialChannels: NotifyChannel[] = rule?.channels ?? []
   const [form, setForm] = useState({
     name: rule?.name ?? '',
     condition_type: rule?.condition_type ?? ('ap_down' as AlertConditionType),
     threshold: rule?.threshold != null ? String(rule.threshold) : '',
     severity: rule?.severity ?? 'warning',
     enabled: rule?.enabled ?? true,
+    channels: initialChannels,
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  const toggleChannel = (c: NotifyChannel) =>
+    setForm(f => ({
+      ...f,
+      channels: f.channels.includes(c) ? f.channels.filter(x => x !== c) : [...f.channels, c],
+    }))
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -267,6 +290,7 @@ function RuleModal({ rule, onClose, onSaved }: { rule?: AlertRule | null; onClos
         threshold: form.threshold ? parseFloat(form.threshold) : null,
         severity: form.severity,
         enabled: form.enabled,
+        channels: form.channels,
       }
       if (editing) await api.updateAlertRule(rule!.id, body)
       else await api.createAlertRule(body)
@@ -308,6 +332,30 @@ function RuleModal({ rule, onClose, onSaved }: { rule?: AlertRule | null; onClos
               <option value="warning">Warning</option>
               <option value="info">Info</option>
             </select>
+          </div>
+          <div>
+            <label className="text-xs text-white block mb-1">Notify on</label>
+            <div className="flex flex-wrap gap-2">
+              {(Object.keys(CHANNEL_LABELS) as NotifyChannel[]).map(c => {
+                const on = form.channels.includes(c)
+                return (
+                  <button type="button" key={c} onClick={() => toggleChannel(c)}
+                    className={clsx(
+                      'px-3 py-1.5 text-xs border transition-colors',
+                      on
+                        ? 'bg-sky-600 border-sky-500 text-white'
+                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white hover:border-gray-600',
+                    )}>
+                    {CHANNEL_LABELS[c]}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-xs text-gray-500 mt-1.5">
+              {form.channels.length === 0
+                ? 'No channels — this rule records events here but notifies no one.'
+                : 'Each channel must also be enabled and configured under Settings → Notifications.'}
+            </p>
           </div>
           {error && <p className="text-red-400 text-xs">{error}</p>}
           <div className="flex justify-end gap-3 pt-2">
@@ -597,6 +645,7 @@ export default function Alerts() {
                 <th className="px-4 py-3 text-left text-xs font-medium text-white">Condition</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-white">Threshold</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-white">Severity</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-white">Notifies</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-white"></th>
               </tr>
             </thead>
@@ -617,6 +666,11 @@ export default function Alerts() {
                   <td className="px-4 py-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${SEV_STYLES[rule.severity] ?? SEV_STYLES.info}`}>{rule.severity}</span>
                   </td>
+                  <td className="px-4 py-3 text-xs">
+                    {rule.channels?.length
+                      ? <span className="text-gray-300">{rule.channels.map(c => CHANNEL_LABELS[c] ?? c).join(', ')}</span>
+                      : <span className="text-gray-600">—</span>}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <button onClick={() => setEditRule(rule)} className="text-xs text-white hover:text-sky-400 transition-colors">Edit</button>
@@ -626,7 +680,7 @@ export default function Alerts() {
                 </tr>
               ))}
               {displayedRules.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-white">
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-white">
                   {rulesFilter ? 'No rules match this filter' : 'No alert rules yet — click "+ New rule" to add one'}
                 </td></tr>
               )}

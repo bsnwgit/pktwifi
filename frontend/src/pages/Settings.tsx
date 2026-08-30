@@ -642,17 +642,22 @@ const SIBLING_LABELS: Record<string, string> = {
 }
 
 interface IntegrationFormState {
-  name: string; app_name: string; base_url: string; suite_token: string
+  name: string; app_name: string; base_url: string; suite_token: string; verify_tls: boolean
 }
 
-const EMPTY_INTEGRATION: IntegrationFormState = { name: '', app_name: 'pktsnmp', base_url: '', suite_token: '' }
+// verify_tls defaults on for anything added here. Existing connections keep
+// whatever they were saved with — see migration 013.
+const EMPTY_INTEGRATION: IntegrationFormState = {
+  name: '', app_name: 'pktsnmp', base_url: '', suite_token: '', verify_tls: true,
+}
 
 function IntegrationFormModal({ integration, onClose, onSaved }: {
   integration: Integration | null; onClose: () => void; onSaved: () => void
 }) {
   const editing = !!integration
   const [form, setForm] = useState<IntegrationFormState>(
-    editing ? { name: integration!.name, app_name: integration!.app_name, base_url: integration!.base_url, suite_token: '' }
+    editing ? { name: integration!.name, app_name: integration!.app_name, base_url: integration!.base_url,
+                suite_token: '', verify_tls: integration!.verify_tls }
             : { ...EMPTY_INTEGRATION }
   )
   const [saving, setSaving] = useState(false)
@@ -665,7 +670,9 @@ function IntegrationFormModal({ integration, onClose, onSaved }: {
     setError('')
     try {
       if (editing) {
-        const body: Partial<IntegrationInput> = { name: form.name, base_url: form.base_url }
+        const body: Partial<IntegrationInput> = {
+          name: form.name, base_url: form.base_url, verify_tls: form.verify_tls,
+        }
         if (form.suite_token) body.suite_token = form.suite_token
         await api.updateIntegration(integration!.id, body)
       } else {
@@ -710,6 +717,17 @@ function IntegrationFormModal({ integration, onClose, onSaved }: {
             <label className="text-xs text-white block mb-1">Suite Token {editing ? '(leave blank to keep)' : '*'}</label>
             <input type="password" value={form.suite_token} onChange={e => setF('suite_token', e.target.value)}
               required={!editing} placeholder="From that app's Settings -> Security -> Suite Integration" className={inp} />
+          </div>
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={form.verify_tls} onChange={e => setF('verify_tls', e.target.checked)}
+                className="accent-sky-600" />
+              <span className="text-xs text-white">Verify TLS certificate</span>
+            </label>
+            <p className="text-xs text-gray-500 mt-1">
+              Every call to this app carries its suite token. Turn this off only for an on-prem
+              sibling behind a self-signed certificate.
+            </p>
           </div>
           {error && <p className="text-red-400 text-xs">{error}</p>}
           <div className="flex justify-end gap-3 pt-2">

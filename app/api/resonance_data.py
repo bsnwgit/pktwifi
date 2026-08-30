@@ -441,6 +441,14 @@ class AlertRule(BaseModel):
     severity: Optional[str] = None
     enabled: bool = False
     created_at: Optional[str] = None
+    channels: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Which notification channels this rule sends on when it fires. Empty means it records "
+            "the firing here and notifies nobody — an enabled rule with no channels is being "
+            "watched but not reported."
+        ),
+    )
 
 
 class AlertRuleList(BaseModel):
@@ -942,7 +950,7 @@ async def list_alert_rules(
 ):
     where = "WHERE enabled = 1" if enabled_only else ""
     async with db.execute(
-        f"SELECT id, name, condition_type, threshold, severity, enabled, created_at "
+        f"SELECT id, name, condition_type, threshold, severity, enabled, created_at, channels "
         f"FROM alert_rules {where} ORDER BY name"
     ) as cur:
         rows = await cur.fetchall()
@@ -950,6 +958,13 @@ async def list_alert_rules(
     for r in rows:
         d = dict(r)
         d["enabled"] = bool(d.get("enabled"))
+        # Stored as a JSON array; hand it over decoded rather than as a string
+        # the reader would have to parse itself.
+        try:
+            parsed = json.loads(d.get("channels") or "[]")
+        except (ValueError, TypeError):
+            parsed = []
+        d["channels"] = parsed if isinstance(parsed, list) else []
         rules.append(d)
     return _fit({"total": len(rules), "rules": rules}, "rules")
 

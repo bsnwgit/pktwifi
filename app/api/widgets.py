@@ -324,7 +324,7 @@ async def _ap_name(ap_id: int) -> str | None:
 
 
 def _gone(what: str) -> str:
-    return f_empty('{html.escape(what)} no longer exists')
+    return _empty(f'{html.escape(what)} no longer exists')
 
 
 # ── Formatting ──────────────────────────────────────────────────────────────────
