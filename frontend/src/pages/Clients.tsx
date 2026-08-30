@@ -112,7 +112,7 @@ export default function Clients() {
         </div>
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+      <div className="f-tbl-scroll bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-gray-800/50 text-gray-400 text-left">
             <tr>
