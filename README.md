@@ -4,6 +4,17 @@
   <img src="lockup-256h.png" alt="pktWiFi" height="64">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/dashboard.webp" alt="pktWiFi — Dashboard" width="900">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/access-points.webp" alt="pktWiFi — Access points" width="430">
+  <img src="docs/screenshots/clients.webp" alt="pktWiFi — Clients" width="430">
+</p>
+
+<p align="center"><sub>Dashboard &middot; Access points &middot; Clients</sub></p>
+
 Enterprise WiFi analyzer — part of the [pkt suite](#the-pkt-suite). Aggregates access point,
 RF/channel, and client data from your own SNMP polling or vendor controller
 APIs, plus device/traffic/log context pulled from sibling pkt* apps
