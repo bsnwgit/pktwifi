@@ -149,6 +149,10 @@ Where no role is set to *Read and write*, the write operations are withheld from
 
 ## Troubleshooting
 
+The five that come up most often. For anything else — the UniFi 401 causes,
+Meraki, Generic SNMP, cross-app context, alerts, TLS, upgrades — see
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
 | Symptom | Check |
 |---|---|
 | Service won't start | `journalctl -u pktwifi -n 50`; check `config.yaml` paths and secret key |
