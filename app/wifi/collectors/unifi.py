@@ -8,7 +8,9 @@ picked via config["auth_method"]:
   (/api/s/<site>/stat/device and /api/s/<site>/stat/sta), which works
   against both a standalone UniFi Network Application and a UDM/UDM-Pro
   ("UniFi OS" console, where every path is proxied under /proxy/network).
-  Rich per-radio (channel/utilization/noise floor) and per-client detail.
+  Rich per-radio (channel/utilization/noise floor) and per-client detail;
+  a radio's noise floor is read from its connected clients, so one with no
+  clients has none (see _poll_userpass).
   Three things confirmed necessary against real UniFi OS gear:
   `follow_redirects=True` (an http:// controller_url that self-redirects
   to https:// otherwise raises on the login request before ever
@@ -48,6 +50,7 @@ Config shape:
 from __future__ import annotations
 
 import logging
+import statistics
 
 import httpx
 
@@ -145,6 +148,21 @@ def _freq_band(freq) -> str | None:
     if 6 <= f < 8:
         return "6GHz"
     return None
+
+
+_CHANNEL_WIDTHS_MHZ = (20, 40, 80, 160, 320)
+
+
+def _width_mhz(value) -> int | None:
+    """A channel width as integer MHz, or None if it isn't one. A live
+    UDM-Pro sends `bw` and `ht` as plain integers; anything that doesn't
+    read as one of the 802.11 widths is left unreported rather than drawn
+    at a width the radio isn't using."""
+    try:
+        width = int(value)
+    except (TypeError, ValueError):
+        return None
+    return width if width in _CHANNEL_WIDTHS_MHZ else None
 
 
 class UnifiCollector(Collector):
@@ -356,22 +374,30 @@ class UnifiCollector(Collector):
                 uptime_seconds=dev.get("uptime"),
             )
             band_radios: dict[str, RadioReading] = {}
+            # Stats rows carry the live channel and power but no `ht`: their
+            # width is `bw`. `ht` is the configured width and only radio_table
+            # has it — both plain integer MHz on a live UDM-Pro. A row with no
+            # `bw` takes `ht`, joined in from radio_table by radio name.
+            radio_config = {rc.get("radio"): rc for rc in dev.get("radio_table") or []}
             for radio in dev.get("radio_table_stats", dev.get("radio_table", [])):
                 radio_name = radio.get("radio", "")
                 band = "2.4GHz" if radio_name == "ng" else ("6GHz" if radio_name == "6e" else "5GHz")
+                width = _width_mhz(radio.get("bw"))
+                if width is None:
+                    width = _width_mhz(radio_config.get(radio_name, radio).get("ht"))
                 r = RadioReading(
                     band=band,
                     channel=radio.get("channel"),
-                    channel_width_mhz=radio.get("ht"),
+                    channel_width_mhz=width,
                     tx_power_dbm=radio.get("tx_power"),
                     utilization_pct=radio.get("cu_total"),
-                    noise_floor_dbm=radio.get("noise"),
                 )
                 ap.radios.append(r)
                 band_radios[radio_name] = r
             radios_by_mac[mac] = band_radios
             result.access_points.append(ap)
 
+        noise_by_radio: dict[tuple[str, str], list] = {}
         for c in clients:
             if not c.get("is_wired", True) is False and "ap_mac" not in c:
                 continue
@@ -380,6 +406,8 @@ class UnifiCollector(Collector):
             target = radios_by_mac.get(ap_mac, {}).get(radio_name)
             if target is None:
                 continue
+            if c.get("noise") is not None:
+                noise_by_radio.setdefault((ap_mac, radio_name), []).append(c["noise"])
             target.clients.append(ClientReading(
                 mac_address=c.get("mac", ""),
                 hostname=c.get("hostname") or c.get("name"),
@@ -391,5 +419,17 @@ class UnifiCollector(Collector):
                 tx_rate_mbps=(c.get("tx_rate") / 1000) if c.get("tx_rate") else None,
                 rx_rate_mbps=(c.get("rx_rate") / 1000) if c.get("rx_rate") else None,
             ))
+
+        # A radio's noise floor has to come from its clients. On a live
+        # UDM-Pro (UniFi Network 10.6.101; UAP6MP, UAPL6 and U7PG2 APs) no
+        # field anywhere in stat/device carries one, and stat/rogueap's
+        # `noise` is -96 on every row whatever the AP or channel. Each client
+        # in stat/sta does carry one, and it is the AP radio's figure rather
+        # than the client's: every client on a radio reports the same value,
+        # and the two radios of one AP differ. A radio with no clients has
+        # none. The median only matters if clients ever disagree — they
+        # agreed on every radio in every poll checked.
+        for (ap_mac, radio_name), readings in noise_by_radio.items():
+            radios_by_mac[ap_mac][radio_name].noise_floor_dbm = statistics.median(readings)
 
         return result
