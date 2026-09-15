@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.dependencies import CurrentUser, AnalystUser
+from app.wifi.freshness import radio_is_current
 
 router = APIRouter()
 
@@ -66,7 +67,11 @@ async def devices_summary(user: CurrentUser, db: aiosqlite.Connection = Depends(
         "SELECT vendor, COUNT(*) AS count FROM access_points GROUP BY vendor ORDER BY count DESC"
     ) as cur:
         by_vendor = await cur.fetchall()
-    async with db.execute("SELECT COALESCE(SUM(client_count), 0) AS total FROM radios") as cur:
+    async with db.execute(
+        f"""SELECT COALESCE(SUM(r.client_count), 0) AS total
+            FROM radios r JOIN access_points ap ON ap.id = r.access_point_id
+            WHERE {radio_is_current()}"""
+    ) as cur:
         clients = await cur.fetchone()
     return {
         "total": row["total"] or 0,

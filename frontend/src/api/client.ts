@@ -154,6 +154,9 @@ export const api = {
   changeMyPassword: (current_password: string, new_password: string) =>
     request('/users/me/change-password', { method: 'POST', body: JSON.stringify({ current_password, new_password }) }),
 
+  // -- Dashboard -------------------------------------------------------------------
+  getDashboard: (hours: number) => request<DashboardData>(`/dashboard${toQueryString({ hours })}`),
+
   // -- Devices (access points) ---------------------------------------------------
   getDevicesSummary: () => request<DevicesSummary>('/devices/summary'),
   getAccessPoints: (params?: { status?: string; site?: string; search?: string; limit?: number; offset?: number }) =>
@@ -450,6 +453,95 @@ export interface DevicesSummary {
   rogue: number
   by_vendor: Array<{ vendor: string; count: number }>
   total_clients: number
+}
+
+// The Dashboard's single read (app/api/dashboard.py). Radio and client figures
+// come only from rows each access point's latest poll wrote — see the note on
+// what "current" means at the top of that module.
+export interface DashboardRadio {
+  id: number
+  ap_id: number
+  ap_name: string
+  ap_status: string
+  band: string
+  channel: number
+  utilization_pct: number | null
+  clients: number
+  lo_mhz: number
+  hi_mhz: number
+  width_mhz: number
+  width_reported: boolean
+  approximate: boolean
+}
+
+export interface DashboardBandAxis {
+  band: string
+  lo_mhz: number
+  hi_mhz: number
+  ticks: Array<{ channel: number; mhz: number; major: boolean }>
+}
+
+export interface DashboardScopePoint {
+  label: string
+  rssi_dbm: number
+  band: string | null
+  ssid: string | null
+}
+
+export interface DashboardScopeSector {
+  ap_id: number | null
+  ap_name: string
+  clients: number
+  points: DashboardScopePoint[]
+}
+
+export interface DashboardTrendPoint {
+  t: number
+  clients: number | null
+  util_2g: number | null
+  util_5g: number | null
+  util_6g: number | null
+}
+
+export interface DashboardData {
+  window: { hours: number; step_sec: number; since: number; until: number }
+  access_points: { total: number; online: number; offline: number; unknown: number; rogue: number }
+  clients: { total: number; detailed: number; by_band: Array<{ band: string; clients: number }> }
+  airtime: {
+    radios: number
+    mean_pct: number | null
+    peak_pct: number | null
+    peak_ap: string | null
+    peak_band: string | null
+    hot_pct: number
+    hot_radios: number
+  }
+  signal: {
+    measured: number
+    median_dbm: number | null
+    good: number
+    fair: number
+    poor: number
+    good_dbm: number
+    fair_dbm: number
+    histogram: Array<{ dbm: number; clients: number }>
+  }
+  generations: Array<{ generation: string; clients: number }>
+  ssid_band: Array<{ ssid: string; band: string; clients: number }>
+  trend: DashboardTrendPoint[]
+  spectrum: { bands: DashboardBandAxis[]; radios: DashboardRadio[]; unplaced: number }
+  scope: DashboardScopeSector[]
+  top_aps: Array<{ id: number; name: string; site: string | null; status: string; clients: number; peak_util_pct: number | null }>
+  collectors: Array<{ id: number; name: string; collector_type: string; enabled: boolean; status: string; last_poll_at: string | null }>
+  alerts: {
+    active: number
+    unacked: number
+    critical: number
+    warning: number
+    info: number
+    recent: Array<{ id: number; severity: string; message: string; created_at: string; acked: boolean; ap_name: string | null }>
+  }
+  events: Record<string, number>
 }
 
 export interface Radio {

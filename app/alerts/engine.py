@@ -14,6 +14,10 @@ Supported condition_type values:
   rogue_ap            - an access point has is_rogue = 1 (set by a collector
                          or a future dedicated rogue-scan feature)
 
+The radio and client conditions only see rows written by the latest poll of
+their access point (app/wifi/freshness.py), so a band or client that stops
+being reported no longer holds an alert open.
+
 This intentionally does not attempt to replicate pktSNMP's much larger
 generic OID-threshold engine (app/alerts/engine.py there) — WiFi's v1 alert
 surface is a small, fixed set of conditions, not arbitrary user-defined OIDs.
@@ -29,6 +33,7 @@ import aiosqlite
 
 from app.alerts import notify
 from app.config import get_settings
+from app.wifi.freshness import client_is_current, radio_is_current
 
 log = logging.getLogger("pktwifi.alerts")
 
@@ -196,9 +201,9 @@ async def _check_ap_down(db: aiosqlite.Connection, rule, fired: list) -> None:
 async def _check_high_channel_util(db: aiosqlite.Connection, rule, fired: list) -> None:
     threshold = rule["threshold"] or 80
     async with db.execute(
-        """SELECT r.access_point_id AS ap_id, a.name AS ap_name, r.band, r.utilization_pct
+        f"""SELECT r.access_point_id AS ap_id, a.name AS ap_name, r.band, r.utilization_pct
            FROM radios r JOIN access_points a ON a.id = r.access_point_id
-           WHERE r.utilization_pct >= ?""",
+           WHERE r.utilization_pct >= ? AND {radio_is_current(ap="a")}""",
         (threshold,),
     ) as cur:
         rows = await cur.fetchall()
@@ -213,7 +218,9 @@ async def _check_high_channel_util(db: aiosqlite.Connection, rule, fired: list) 
 async def _check_low_snr(db: aiosqlite.Connection, rule, fired: list) -> None:
     threshold = rule["threshold"] or 15
     async with db.execute(
-        "SELECT mac_address, hostname, snr_db FROM wifi_clients WHERE snr_db IS NOT NULL AND snr_db <= ?",
+        f"""SELECT c.mac_address, c.hostname, c.snr_db
+           FROM wifi_clients c JOIN access_points a ON a.id = c.access_point_id
+           WHERE c.snr_db IS NOT NULL AND c.snr_db <= ? AND {client_is_current(ap="a")}""",
         (threshold,),
     ) as cur:
         rows = await cur.fetchall()
@@ -228,13 +235,15 @@ async def _check_low_snr(db: aiosqlite.Connection, rule, fired: list) -> None:
 
 async def _check_high_retry_rate(db: aiosqlite.Connection, rule, fired: list) -> None:
     threshold = rule["threshold"] or 15
+    # The newest sample of a radio that is no longer reported is as old as the
+    # radio row itself, so it is held to the same rule.
     async with db.execute(
-        """SELECT r.access_point_id AS ap_id, a.name AS ap_name, r.band, m.retry_pct
+        f"""SELECT r.access_point_id AS ap_id, a.name AS ap_name, r.band, m.retry_pct
            FROM radio_metrics m
            JOIN radios r ON r.id = m.radio_id
            JOIN access_points a ON a.id = r.access_point_id
            WHERE m.id IN (SELECT MAX(id) FROM radio_metrics GROUP BY radio_id)
-             AND m.retry_pct >= ?""",
+             AND m.retry_pct >= ? AND {radio_is_current(ap="a")}""",
         (threshold,),
     ) as cur:
         rows = await cur.fetchall()
@@ -249,9 +258,9 @@ async def _check_high_retry_rate(db: aiosqlite.Connection, rule, fired: list) ->
 async def _check_high_client_count(db: aiosqlite.Connection, rule, fired: list) -> None:
     threshold = rule["threshold"] or 50
     async with db.execute(
-        """SELECT r.access_point_id AS ap_id, a.name AS ap_name, r.band, r.client_count
+        f"""SELECT r.access_point_id AS ap_id, a.name AS ap_name, r.band, r.client_count
            FROM radios r JOIN access_points a ON a.id = r.access_point_id
-           WHERE r.client_count >= ?""",
+           WHERE r.client_count >= ? AND {radio_is_current(ap="a")}""",
         (threshold,),
     ) as cur:
         rows = await cur.fetchall()

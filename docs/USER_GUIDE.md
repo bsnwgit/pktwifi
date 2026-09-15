@@ -14,7 +14,16 @@ Settings itself opens with a section bar: **Common** (General, Security, Data, N
 
 ## Dashboard
 
-At-a-glance counts of total/online/offline/rogue access points, connected client count, and the current active alerts list.
+The estate at a glance, refreshed every 30 seconds. Every figure counts only what each access point's latest poll reported, so a client that has left, or a band a controller has stopped reporting, drops off straight away.
+
+- **Readouts** — access points (online/offline/rogue), availability, connected clients by band, mean and peak channel utilization, median client signal, and active alerts. Click one to open the matching page.
+- **Connected Clients** and **Airtime by Band** — trends over the window picked at the top right (1h/6h/24h/7d). A gap in a line is time with no samples, not zero. The red dashed line is the threshold your *High channel utilization* alert rule fires at (80% when there is no such rule).
+- **RF Spectrum** — every radio drawn where it sits on air, one lane per band, its height set by channel utilization. Shapes that overlap are radios contending for the same airtime. A dashed outline means the controller did not report the channel width (20 MHz is assumed) or the channel plan leaves the position approximate. Click a radio to open its Metrics.
+- **Signal Scope** — each connected client in its access point's sector, closer to the centre the stronger its signal. Where a client sits around its sector means nothing. The 16 busiest access points get a sector each and the rest share one; click a sector to list its clients.
+- **Client Flow**, **Client Mix** and **Signal Quality** — clients by SSID and band, by band and Wi-Fi generation, and by signal strength (good ≥ −65 dBm, fair ≥ −75 dBm).
+- **Busiest Access Points**, **Collection** and **Active Alerts** — the most loaded access points (click one for its Metrics), controller health with the associations and roams seen in the window, and the alerts currently open.
+
+> The client panels and the scope rely on per-client detail. With a UniFi controller on API-key auth, clients show as *Not reported* and signal panels stay empty — the same Integration API limitation described under Access Points.
 
 ## Access Points
 
@@ -33,6 +42,8 @@ Pick an AP from the searchable list to see per-band channel-utilization, retry-r
 ## Alerts
 
 Shows fired alert events. If your role is analyst or admin, you can acknowledge or resolve them.
+
+Rules on radios and clients — channel utilization, client count, retry rate and SNR — look only at what each access point's latest poll reported, so a radio or client that stops being reported no longer keeps an alert open.
 
 ## Logs
 

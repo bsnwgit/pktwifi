@@ -220,7 +220,7 @@ Sidebar navigation (`frontend/src/components/Layout.tsx`):
 
 | Page | Access | What it does |
 |---|---|---|
-| **Dashboard** | all roles | AP counts (total/online/offline/rogue), connected client count, active alerts list, recent AP status at a glance. |
+| **Dashboard** | all roles | One `/api/dashboard` read, refreshed every 30s: readouts (APs, availability, clients, airtime, median signal, alerts), client and per-band airtime trends over 1h/6h/24h/7d, an RF spectrum placing every radio's occupied channel block, a signal scope of clients by AP and RSSI, SSID→band flow, band and Wi-Fi generation mix, a signal histogram, busiest APs, collector health and active alerts. Radio and client figures count only rows written by each AP's latest poll. |
 | **Access Points** | all roles | Searchable, server-side-paginated AP inventory across every controller — status, vendor, model, firmware. Click a row for a detail panel: per-radio channel/utilization/retry data where the controller supplies it, and connected clients grouped by the actual radio/channel they're attached to (see [Vendor Collectors](#vendor-collectors) for the UniFi API-key-mode caveat on that). A client row jumps to Clients pre-filtered to that AP; **View Metrics →** opens [Metrics](#metrics) pre-selected to that AP. |
 | **Clients** | all roles | Searchable, server-side-paginated client list — SSID, band, channel, RSSI/SNR, tx/rx rate, real connect time (**Connected** column — see the UniFi collector notes on what's actually reported per auth mode), which AP it's attached to. Supports an `?access_point_id=` filter (with a clearable chip) used by the Access Points detail panel's click-through. |
 | **Metrics** | all roles | Dedicated time-series view — pick an AP from the searchable left-hand list, see per-band channel-utilization/retry-rate/client-count charts for a 1h/6h/24h/7d window; see [Metrics](#metrics). |
@@ -321,8 +321,10 @@ shows:
   standalone UniFi Network Application and a UDM/UDM-Pro/Cloud Key Gen2+
   console (toggle **UDM / UDM-Pro / Cloud Key Gen2+** for the latter —
   paths get proxied under `/proxy/network`). Gives rich per-radio
-  (channel/utilization/noise-floor) and per-client detail. Auth comes from
-  a **username/password credential** picked via dropdown from the
+  (channel/utilization/noise-floor) and per-client detail. A radio's noise
+  floor comes from its connected clients — the controller reports it on each
+  client, not on the radio — so a radio with no clients shows none. Auth
+  comes from a **username/password credential** picked via dropdown from the
   Credentials library (`Settings -> Credentials`), not typed inline — use a
   dedicated local (non-cloud) read-only admin account, not your own login.
 - **API key** — Ubiquiti's official local Network Integration API v1
@@ -564,7 +566,10 @@ Six built-in condition types (`app/alerts/engine.py`): `ap_down`,
 `high_channel_util`, `low_snr`, `high_retry_rate`, `high_client_count`,
 `rogue_ap`. Create rules under Alerts -> Rules; the engine evaluates every
 30 seconds and auto-resolves an alert once its target is no longer in
-violation.
+violation. The radio and client conditions only look at rows written by each
+access point's latest poll (`app/wifi/freshness.py`) — `radios` and
+`wifi_clients` are snapshots that are never expired, so without that a band or
+client that stopped being reported would hold its alert open indefinitely.
 
 Firing alerts can also dispatch out to five notification channels,
 configured under **Settings -> Notifications**: **Slack** (webhook URL +
@@ -640,6 +645,16 @@ anyone who could reach the port. The router now carries
 `dependencies=[Depends(require_suite_token)]`, matching the NOC Builder's
 actual access path. Anything calling those URLs without `X-Suite-Token` now
 gets a 401.
+
+### Widget figures count only current radios and clients
+
+`radios` and `wifi_clients` are snapshots the poll engine upserts and never
+expires. The widgets that sum or list them — WiFi Summary, AP Status, Client
+Count, Radio Overview, Channel Utilization, Noise Floor, Clients by Band,
+Clients by SSID and Client Signal Health — read only rows written by each
+access point's latest poll (`app/wifi/freshness.py`). Before that, a band a
+controller stopped reporting kept adding its last client count, and a client
+that had left was still counted.
 
 
 ---

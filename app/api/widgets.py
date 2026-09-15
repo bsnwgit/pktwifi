@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.config import get_settings
 from app.dependencies import require_suite_token
+from app.wifi.freshness import client_is_current, radio_is_current
 
 # These views are embedded as unauthenticated iframes by pktHub's NOC Builder,
 # so they can't require a login session — but they do render internal access
@@ -431,8 +432,9 @@ async def widget_ap_status():
         async with aiosqlite.connect(_DB) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                """SELECT ap.id, ap.name, ap.site, ap.status,
-                          COALESCE((SELECT SUM(r.client_count) FROM radios r WHERE r.access_point_id = ap.id), 0) AS clients
+                f"""SELECT ap.id, ap.name, ap.site, ap.status,
+                          COALESCE((SELECT SUM(r.client_count) FROM radios r
+                                    WHERE r.access_point_id = ap.id AND {radio_is_current()}), 0) AS clients
                    FROM access_points ap
                    ORDER BY CASE ap.status WHEN 'offline' THEN 0 WHEN 'unknown' THEN 1 ELSE 2 END, ap.name"""
             ) as cur:
@@ -470,7 +472,10 @@ async def widget_client_count(ap_id: int | None = None):
         async with aiosqlite.connect(_DB) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT band, client_count FROM radios WHERE access_point_id=? ORDER BY band", (ap_id,)
+                f"""SELECT r.band, r.client_count
+                    FROM radios r JOIN access_points ap ON ap.id = r.access_point_id
+                    WHERE r.access_point_id = ? AND {radio_is_current()} ORDER BY r.band""",
+                (ap_id,),
             ) as cur:
                 bands = [dict(r) for r in await cur.fetchall()]
     except Exception as exc:
@@ -544,7 +549,11 @@ async def widget_wifi_summary():
                   SUM(CASE WHEN is_rogue=1       THEN 1 ELSE 0 END) AS rogue
            FROM access_points"""
     )
-    cli = await _rows("SELECT COUNT(*) AS clients FROM wifi_clients")
+    cli = await _rows(
+        f"""SELECT COUNT(*) AS clients
+            FROM wifi_clients c JOIN access_points ap ON ap.id = c.access_point_id
+            WHERE {client_is_current()}"""
+    )
     a   = ap[0] if ap else {}
     body = _tiles([
         ("APs",     a.get("total")   or 0),
@@ -628,9 +637,10 @@ async def widget_rogue_aps():
 @router.get("/radio_overview", response_class=HTMLResponse, include_in_schema=False)
 async def widget_radio_overview():
     rows = await _rows(
-        """SELECT ap.name AS ap_name, r.band, r.channel, r.channel_width_mhz,
+        f"""SELECT ap.name AS ap_name, r.band, r.channel, r.channel_width_mhz,
                   r.tx_power_dbm, r.utilization_pct, r.noise_floor_dbm, r.client_count
            FROM radios r JOIN access_points ap ON ap.id = r.access_point_id
+           WHERE {radio_is_current()}
            ORDER BY r.utilization_pct DESC, ap.name LIMIT 60"""
     )
     if rows:
@@ -656,9 +666,9 @@ async def widget_radio_overview():
 @router.get("/channel_utilization", response_class=HTMLResponse, include_in_schema=False)
 async def widget_channel_utilization():
     rows = await _rows(
-        """SELECT ap.name AS ap_name, r.band, r.channel, r.utilization_pct
+        f"""SELECT ap.name AS ap_name, r.band, r.channel, r.utilization_pct
            FROM radios r JOIN access_points ap ON ap.id = r.access_point_id
-           WHERE r.utilization_pct IS NOT NULL
+           WHERE r.utilization_pct IS NOT NULL AND {radio_is_current()}
            ORDER BY r.utilization_pct DESC LIMIT 25"""
     )
     body = _bars([
@@ -674,9 +684,9 @@ async def widget_channel_utilization():
 async def widget_noise_floor():
     # Noise floor is negative dBm — closer to zero is worse, so rank descending.
     rows = await _rows(
-        """SELECT ap.name AS ap_name, r.band, r.noise_floor_dbm
+        f"""SELECT ap.name AS ap_name, r.band, r.noise_floor_dbm
            FROM radios r JOIN access_points ap ON ap.id = r.access_point_id
-           WHERE r.noise_floor_dbm IS NOT NULL
+           WHERE r.noise_floor_dbm IS NOT NULL AND {radio_is_current()}
            ORDER BY r.noise_floor_dbm DESC LIMIT 25"""
     )
     if rows:
@@ -696,7 +706,8 @@ async def widget_noise_floor():
 async def widget_clients_by_band():
     rows = await _rows(
         "SELECT COALESCE(NULLIF(band,''),'unknown') AS band, COUNT(*) AS n "
-        "FROM wifi_clients GROUP BY band ORDER BY n DESC"
+        "FROM wifi_clients c JOIN access_points ap ON ap.id = c.access_point_id "
+        f"WHERE {client_is_current()} GROUP BY band ORDER BY n DESC"
     )
     body = _bars([(r["band"], r["n"], str(r["n"])) for r in rows]) \
         if rows else _empty('No clients are currently associated')
@@ -708,7 +719,8 @@ async def widget_clients_by_band():
 async def widget_clients_by_ssid():
     rows = await _rows(
         "SELECT COALESCE(NULLIF(ssid,''),'unknown') AS ssid, COUNT(*) AS n "
-        "FROM wifi_clients GROUP BY ssid ORDER BY n DESC LIMIT 20"
+        "FROM wifi_clients c JOIN access_points ap ON ap.id = c.access_point_id "
+        f"WHERE {client_is_current()} GROUP BY ssid ORDER BY n DESC LIMIT 20"
     )
     body = _bars([(r["ssid"], r["n"], str(r["n"])) for r in rows]) \
         if rows else _empty('No clients are currently associated')
@@ -719,10 +731,10 @@ async def widget_clients_by_ssid():
 @router.get("/client_health", response_class=HTMLResponse, include_in_schema=False)
 async def widget_client_health():
     rows = await _rows(
-        """SELECT c.hostname, c.mac_address, c.ssid, c.band, c.rssi_dbm, c.snr_db,
+        f"""SELECT c.hostname, c.mac_address, c.ssid, c.band, c.rssi_dbm, c.snr_db,
                   c.tx_rate_mbps, ap.name AS ap_name
-           FROM wifi_clients c LEFT JOIN access_points ap ON ap.id = c.access_point_id
-           WHERE c.rssi_dbm IS NOT NULL ORDER BY c.rssi_dbm ASC LIMIT 40"""
+           FROM wifi_clients c JOIN access_points ap ON ap.id = c.access_point_id
+           WHERE c.rssi_dbm IS NOT NULL AND {client_is_current()} ORDER BY c.rssi_dbm ASC LIMIT 40"""
     )
     if rows:
         def _sig(rssi) -> str:

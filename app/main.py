@@ -39,6 +39,7 @@ from app.api import (
     widgets as widgets_router,
     nav as nav_router,
     docs as docs_router,
+    dashboard as dashboard_router,
 )
 from app.api import resonance as resonance_router
 from app.api import resonance_data as resonance_data_router
@@ -323,6 +324,7 @@ async def _direct_access_lock(request: Request, call_next):
 
 app.include_router(auth.router,             prefix="/api/auth",         tags=["auth"])
 app.include_router(users.router,            prefix="/api/users",        tags=["users"])
+app.include_router(dashboard_router.router, prefix="/api/dashboard",    tags=["dashboard"])
 app.include_router(devices_router.router,   prefix="/api/devices",      tags=["devices"])
 app.include_router(clients_router.router,   prefix="/api/clients",      tags=["clients"])
 app.include_router(metrics_router.router,   prefix="/api/metrics",      tags=["metrics"])
