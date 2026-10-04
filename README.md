@@ -637,6 +637,10 @@ this app's own role check against the `X-Suite-Role` pktHub asserts.
 which resolves against the parent's height — and collapses to zero against an
 auto-height parent, rendering blank. Maps and canvases hit this first.
 
+### RF widgets for the NOC Builder
+
+Three Dashboard visuals are now NOC widgets: **Airtime by Band** (average channel utilization per band over time, across every radio), **RF Spectrum** (each radio placed by channel and width in the 2.4, 5 and 6 GHz bands, height showing utilization; dashed marks a width that was not reported, an approximate position, or no utilization reading) and **Signal Scope** (every connected client by the access point it sits on, range showing signal strength). They share `app/wifi/rf.py` with the Dashboard, so channel placement and signal thresholds cannot drift between the two.
+
 ### Widget endpoints now require the suite token
 
 `app/api/widgets.py` previously mounted its router with a bare `APIRouter()`,

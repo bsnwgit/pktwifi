@@ -181,6 +181,26 @@ MANIFEST = [
         "params": [_WINDOW_PARAM],
     },
 
+    {
+        "id": "airtime_trend", "title": "Airtime by Band", "category": "Trends",
+        "description": "Average channel utilization per band over time, across all radios",
+        "view_path": "/api/widgets/airtime_trend",
+        "default_w": 680, "default_h": 320, "min_w": 320, "min_h": 180,
+        "params": [_WINDOW_PARAM],
+    },
+    {
+        "id": "rf_spectrum", "title": "RF Spectrum", "category": "Radios",
+        "description": "Where each radio sits in the 2.4, 5 and 6 GHz bands; height is channel utilization",
+        "view_path": "/api/widgets/rf_spectrum",
+        "default_w": 760, "default_h": 420, "min_w": 400, "min_h": 260,
+    },
+    {
+        "id": "signal_scope", "title": "Signal Scope", "category": "Clients",
+        "description": "Every connected client by the access point it is on; range is signal strength",
+        "view_path": "/api/widgets/signal_scope",
+        "default_w": 520, "default_h": 460, "min_w": 300, "min_h": 300,
+    },
+
     # ── Alerts ────────────────────────────────────────────────────────────────
     {
         "id": "active_alerts", "title": "Active Alerts", "category": "Alerts",
@@ -830,6 +850,143 @@ async def widget_radio_trend(
     label = f"{band[0]['band']} {metric}" if band else metric
     body  = _line_chart([(label, [r["v"] for r in rows])])
     return HTMLResponse(_page(f"{label} — last {hours}h", body))
+
+
+# ── Airtime by Band widget (chart) ────────────────────────────────────────────
+@router.get("/airtime_trend", response_class=HTMLResponse, include_in_schema=False)
+async def widget_airtime_trend(hours: int = 6):
+    hours  = max(1, min(int(hours or 6), 720))
+    bucket = max(60, (hours * 3600) // 120)
+    rows = await _rows(
+        """SELECT (CAST(strftime('%s', m.ts) AS INTEGER) / ?) AS b, r.band AS band,
+                  AVG(m.utilization_pct) AS util
+           FROM radio_metrics m JOIN radios r ON r.id = m.radio_id
+           WHERE m.ts >= ? AND m.utilization_pct IS NOT NULL
+             AND r.band IN ('2.4GHz','5GHz','6GHz')
+           GROUP BY b, r.band ORDER BY b""",
+        (bucket, _since(hours)),
+    )
+    if not rows:
+        return HTMLResponse(_page("Airtime by Band", _empty('No radio reported utilization in this window')))
+    buckets = sorted({r["b"] for r in rows})
+    series = []
+    for band in ("2.4GHz", "5GHz", "6GHz"):
+        have = {r["b"]: r["util"] for r in rows if r["band"] == band}
+        if not have:
+            continue
+        # Carry the last reading across a gap (and the first one back to the
+        # start) so every band spans the same buckets.
+        first = have[min(have)]
+        vals, last = [], first
+        for b in buckets:
+            last = have.get(b, last)
+            vals.append(float(last))
+        series.append((band, vals))
+    body = _line_chart(series, fmt=lambda v: f"{v:.0f}%")
+    return HTMLResponse(_page(f"Airtime by Band — last {hours}h", body))
+
+
+# ── RF Spectrum widget ────────────────────────────────────────────────────────
+@router.get("/rf_spectrum", response_class=HTMLResponse, include_in_schema=False)
+async def widget_rf_spectrum():
+    from app.wifi.rf import BANDS, band_axis, occupied_span
+    rows = await _rows(
+        """SELECT ap.name AS ap_name, r.band, r.channel, r.channel_width_mhz, r.utilization_pct
+           FROM radios r JOIN access_points ap ON ap.id = r.access_point_id
+           WHERE r.band IN ('2.4GHz','5GHz','6GHz')"""
+    )
+    placed = []
+    for r in rows:
+        span = occupied_span(r["band"], r["channel"], r["channel_width_mhz"])
+        if span:
+            placed.append({**r, **span})
+    if not placed:
+        return HTMLResponse(_page("RF Spectrum", _empty('No radio has a usable channel')))
+
+    colors = {"2.4GHz": "#fb923c", "5GHz": "#60a5fa", "6GHz": "#a78bfa"}
+    W, LANE, GAP = 600, 96, 22
+    lanes, y0 = [], 0
+    for band in BANDS:
+        mine = [p for p in placed if p["band"] == band]
+        if not mine:
+            continue
+        ax = band_axis(band)
+        lo, hi = ax["lo_mhz"], ax["hi_mhz"]
+        X = lambda mhz: (mhz - lo) / (hi - lo) * W
+        base = y0 + LANE
+        parts = [f'<text x="0" y="{y0 + 9}" font-size="10" fill="#94a3b8">{html.escape(band)}</text>',
+                 f'<line x1="0" y1="{base}" x2="{W}" y2="{base}" stroke="#334155"/>']
+        for t in ax["ticks"]:
+            if t["major"]:
+                x = X(t["mhz"])
+                parts.append(f'<line x1="{x:.1f}" y1="{base}" x2="{x:.1f}" y2="{base + 4}" stroke="#475569"/>'
+                             f'<text x="{x:.1f}" y="{base + 14}" font-size="8" text-anchor="middle" fill="#64748b">{t["channel"]}</text>')
+        for p in mine:
+            util = p["utilization_pct"]
+            h = max(4.0, (float(util) if util is not None else 8.0) / 100 * (LANE - 18))
+            x, w = X(p["lo_mhz"]), max(2.0, X(p["hi_mhz"]) - X(p["lo_mhz"]))
+            dash = ' stroke-dasharray="3 2" stroke="#e2e8f0" stroke-width="1"' \
+                if (p["approximate"] or not p["width_reported"] or util is None) else ""
+            tip = f'{p["ap_name"]} · ch {p["channel"]} · ' + (f'{float(util):.0f}%' if util is not None else 'no utilization')
+            parts.append(f'<rect x="{x:.1f}" y="{base - h:.1f}" width="{w:.1f}" height="{h:.1f}" '
+                         f'fill="{colors[band]}" fill-opacity="0.35"{dash}><title>{html.escape(tip)}</title></rect>')
+        lanes.append("".join(parts))
+        y0 += LANE + GAP
+    body = (f'<svg viewBox="0 0 {W} {y0}" style="width:100%;height:auto" xmlns="http://www.w3.org/2000/svg">'
+            f'{"".join(lanes)}</svg>'
+            '<div style="font-size:10px;color:#64748b;margin-top:6px">height = channel utilization · '
+            'dashed = width not reported, position approximate or no utilization</div>')
+    return HTMLResponse(_page("RF Spectrum", body))
+
+
+# ── Signal Scope widget ───────────────────────────────────────────────────────
+@router.get("/signal_scope", response_class=HTMLResponse, include_in_schema=False)
+async def widget_signal_scope():
+    import math
+    import zlib
+    from app.wifi.rf import SIGNAL_FAIR_DBM, SIGNAL_GOOD_DBM
+    rows = await _rows(
+        """SELECT ap.id AS ap_id, ap.name AS ap_name, c.rssi_dbm, c.mac_address
+           FROM wifi_clients c JOIN access_points ap ON ap.id = c.access_point_id
+           WHERE c.rssi_dbm IS NOT NULL AND c.last_seen >= datetime(ap.last_seen, '-60 seconds')"""
+    )
+    if not rows:
+        return HTMLResponse(_page("Signal Scope", _empty('No client is reporting a signal')))
+    by_ap: dict[int, list[dict]] = {}
+    for r in rows:
+        by_ap.setdefault(r["ap_id"], []).append(r)
+    ranked = sorted(by_ap.values(), key=lambda m: (-len(m), m[0]["ap_name"]))[:16]
+
+    CX = CY = 200
+    R_CORE, R_MAX, STRONG, WEAK = 20, 150, -30, -95
+    rng = lambda v: R_CORE + (R_MAX - R_CORE) * (STRONG - max(WEAK, min(STRONG, v))) / (STRONG - WEAK)
+    n = len(ranked)
+    parts = []
+    for dbm, lbl in ((SIGNAL_GOOD_DBM, "good"), (SIGNAL_FAIR_DBM, "fair")):
+        parts.append(f'<circle cx="{CX}" cy="{CY}" r="{rng(dbm):.1f}" fill="none" stroke="#334155" '
+                     f'stroke-dasharray="2 4"/><text x="{CX + 3}" y="{CY - rng(dbm) - 2:.1f}" '
+                     f'font-size="7" fill="#64748b">{dbm} dBm</text>')
+    for i, members in enumerate(ranked):
+        a0, a1 = 360 * i / n, 360 * (i + 1) / n
+        mid = math.radians((a0 + a1) / 2)
+        sx, sy = CX + R_MAX * math.sin(math.radians(a0)), CY - R_MAX * math.cos(math.radians(a0))
+        parts.append(f'<line x1="{CX}" y1="{CY}" x2="{sx:.1f}" y2="{sy:.1f}" stroke="#1e293b"/>')
+        lx, ly = CX + (R_MAX + 14) * math.sin(mid), CY - (R_MAX + 14) * math.cos(mid)
+        name = str(members[0]["ap_name"])
+        parts.append(f'<text x="{lx:.1f}" y="{ly:.1f}" font-size="8" text-anchor="middle" fill="#94a3b8">'
+                     f'{html.escape(name[:14])} · {len(members)}</text>')
+        for j, c in enumerate(sorted(members, key=lambda m: m["rssi_dbm"])[:120]):
+            # Where a client sits around its sector means nothing; it is spread
+            # out only so the dots do not stack.
+            frac = ((zlib.crc32(f'{c["mac_address"]}|{i}'.encode()) % 1000) / 1000) * 0.8 + 0.1
+            ang = math.radians(a0 + (a1 - a0) * frac)
+            r = rng(float(c["rssi_dbm"]))
+            col = ("#4ade80" if c["rssi_dbm"] >= SIGNAL_GOOD_DBM
+                   else "#fbbf24" if c["rssi_dbm"] >= SIGNAL_FAIR_DBM else "#f87171")
+            parts.append(f'<circle cx="{CX + r * math.sin(ang):.1f}" cy="{CY - r * math.cos(ang):.1f}" r="2.2" fill="{col}"/>')
+    body = ('<svg viewBox="0 0 400 400" style="width:100%;height:100%;max-height:100%" '
+            f'xmlns="http://www.w3.org/2000/svg">{"".join(parts)}</svg>')
+    return HTMLResponse(_page("Signal Scope", body))
 
 
 # ── Client Trend widget (chart) ───────────────────────────────────────────────
