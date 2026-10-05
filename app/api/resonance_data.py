@@ -50,6 +50,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.database import get_db
+from app.wifi.freshness import client_is_current, radio_is_current
 
 # Deliberately the same helpers /api/resonance/code uses, imported rather than
 # reimplemented: the two surfaces must never disagree about who counts as
@@ -587,8 +588,14 @@ async def get_wifi_summary(
         "rogue_access_points": await _count(
             "SELECT COUNT(*) FROM access_points WHERE is_rogue = 1"
         ),
-        "clients": await _count("SELECT COUNT(*) FROM wifi_clients"),
-        "radios": await _count("SELECT COUNT(*) FROM radios"),
+        "clients": await _count(
+            f"SELECT COUNT(*) FROM wifi_clients c JOIN access_points ap ON ap.id = c.access_point_id "
+            f"WHERE {client_is_current()}"
+        ),
+        "radios": await _count(
+            f"SELECT COUNT(*) FROM radios r JOIN access_points ap ON ap.id = r.access_point_id "
+            f"WHERE {radio_is_current()}"
+        ),
         "ssids": await _count("SELECT COUNT(*) FROM ssids"),
         "sites": await _count("SELECT COUNT(*) FROM sites"),
         "collectors": await _count("SELECT COUNT(*) FROM collectors"),
@@ -649,7 +656,7 @@ async def list_access_points(
         f"""SELECT a.id, a.name, a.mac_address, a.ip_address, a.vendor, a.model,
                    a.firmware_version, a.site, a.floor, a.status, a.is_rogue,
                    a.uptime_seconds, a.collector_id, a.last_seen,
-                   (SELECT COUNT(*) FROM wifi_clients c WHERE c.access_point_id = a.id)
+                   (SELECT COUNT(*) FROM wifi_clients c WHERE c.access_point_id = a.id AND {client_is_current(ap='a')})
                        AS client_count
             FROM access_points a
             {where}
@@ -689,10 +696,10 @@ async def get_access_point(
     db: aiosqlite.Connection = Depends(get_db),
 ):
     async with db.execute(
-        """SELECT a.id, a.name, a.mac_address, a.ip_address, a.vendor, a.model,
+        f"""SELECT a.id, a.name, a.mac_address, a.ip_address, a.vendor, a.model,
                   a.firmware_version, a.site, a.floor, a.status, a.is_rogue,
                   a.uptime_seconds, a.collector_id, a.last_seen,
-                  (SELECT COUNT(*) FROM wifi_clients c WHERE c.access_point_id = a.id)
+                  (SELECT COUNT(*) FROM wifi_clients c WHERE c.access_point_id = a.id AND {client_is_current(ap='a')})
                       AS client_count
            FROM access_points a WHERE a.id = ?""",
         (ap_id,),
@@ -753,9 +760,14 @@ async def list_wifi_clients(
         clauses.append("(c.mac_address LIKE ? OR c.hostname LIKE ? OR c.ip_address LIKE ?)")
         like = f"%{search}%"
         params.extend([like] * 3)
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    # Only clients on air now; the tables keep rows a poll no longer reports.
+    clauses.append(client_is_current(ap="a"))
+    where = "WHERE " + " AND ".join(clauses)
 
-    async with db.execute(f"SELECT COUNT(*) FROM wifi_clients c {where}", params) as cur:
+    async with db.execute(
+        f"SELECT COUNT(*) FROM wifi_clients c JOIN access_points a ON a.id = c.access_point_id {where}",
+        params,
+    ) as cur:
         total = (await cur.fetchone())[0]
 
     async with db.execute(
@@ -764,7 +776,7 @@ async def list_wifi_clients(
                    c.access_point_id, c.connected_at, c.last_seen,
                    a.name AS access_point_name
             FROM wifi_clients c
-            LEFT JOIN access_points a ON a.id = c.access_point_id
+            JOIN access_points a ON a.id = c.access_point_id
             {where}
             ORDER BY c.rssi_dbm ASC
             LIMIT ? OFFSET ?""",
@@ -805,14 +817,15 @@ async def list_radios(
     if band:
         clauses.append("r.band = ?")
         params.append(band)
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    clauses.append(radio_is_current(ap="a"))
+    where = "WHERE " + " AND ".join(clauses)
 
     async with db.execute(
         f"""SELECT r.id, r.access_point_id, r.band, r.channel, r.channel_width_mhz,
                    r.tx_power_dbm, r.utilization_pct, r.noise_floor_dbm, r.client_count,
                    r.updated_at, a.name AS access_point_name
             FROM radios r
-            LEFT JOIN access_points a ON a.id = r.access_point_id
+            JOIN access_points a ON a.id = r.access_point_id
             {where}
             ORDER BY r.utilization_pct DESC""",
         params,

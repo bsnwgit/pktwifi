@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.database import get_db
 from app.dependencies import CurrentUser
+from app.wifi.freshness import client_is_current
 
 router = APIRouter()
 
@@ -21,6 +22,7 @@ router = APIRouter()
 _CLIENT_SELECT = """
     SELECT wc.*, r.channel AS channel, r.channel_width_mhz AS channel_width_mhz
     FROM wifi_clients wc
+    JOIN access_points ap ON ap.id = wc.access_point_id
     LEFT JOIN radios r ON r.id = wc.radio_id
 """
 
@@ -48,7 +50,9 @@ def _client_out(row) -> dict:
 
 
 def _list_filters(access_point_id: int | None, ssid: str | None, search: str | None) -> tuple[str, list]:
-    where = " WHERE 1=1"
+    # The list and its count show clients on air now, not every client the
+    # poll engine ever stored (see app/wifi/freshness.py).
+    where = f" WHERE {client_is_current('wc')}"
     params: list = []
     if access_point_id is not None:
         where += " AND wc.access_point_id = ?"
@@ -98,7 +102,7 @@ async def count_clients(
     db: aiosqlite.Connection = Depends(get_db),
 ):
     where, params = _list_filters(access_point_id, ssid, search)
-    query = "SELECT COUNT(*) AS total FROM wifi_clients wc LEFT JOIN radios r ON r.id = wc.radio_id" + where
+    query = "SELECT COUNT(*) AS total FROM wifi_clients wc JOIN access_points ap ON ap.id = wc.access_point_id LEFT JOIN radios r ON r.id = wc.radio_id" + where
     async with db.execute(query, params) as cur:
         row = await cur.fetchone()
     return {"total": row["total"]}
