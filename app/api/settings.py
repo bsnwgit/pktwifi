@@ -8,14 +8,16 @@ Settings page grouped by section.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.alerts import notify
+from app.auth import saml as saml_auth
 from app.database import get_db
 from app.dependencies import CurrentUser, AdminUser
 
@@ -94,6 +96,14 @@ class TestNotificationRequest(BaseModel):
     channel: str
 
 
+# An IdP's metadata is a few kilobytes; a federation's can be a few hundred.
+_MAX_METADATA_CHARS = 512_000
+
+
+class ParseMetadataRequest(BaseModel):
+    xml: str = Field(min_length=1, max_length=_MAX_METADATA_CHARS)
+
+
 @router.get("")
 async def get_settings(user: CurrentUser, db: aiosqlite.Connection = Depends(get_db)):
     async with db.execute("SELECT key, value FROM settings") as cur:
@@ -157,3 +167,13 @@ async def test_notification(
     )
     result = await notify.send(db, body.channel, alert)
     return {"status": result.status, "detail": result.detail}
+
+
+@router.post("/saml/parse-metadata")
+async def parse_saml_metadata(body: ParseMetadataRequest, _: AdminUser):
+    """Read an IdP's metadata XML and return the three fields the Auth tab fills
+    in from it. Nothing is stored — the person reviews them and saves."""
+    try:
+        return await asyncio.to_thread(saml_auth.parse_idp_metadata, body.xml)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

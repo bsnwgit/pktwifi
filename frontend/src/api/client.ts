@@ -255,6 +255,9 @@ export const api = {
 
   getSettings: () => request<Record<string, unknown>>('/settings'),
   updateSettings: (values: Record<string, unknown>) => request('/settings', { method: 'PUT', body: JSON.stringify({ values }) }),
+  parseSamlMetadata: (xml: string) =>
+    request<{ entity_id: string; sso_url: string; cert: string }>(
+      '/settings/saml/parse-metadata', { method: 'POST', body: JSON.stringify({ xml }) }),
   testNotification: (channel: string) =>
     request<{ status: string; detail?: string }>('/settings/test-notification', {
       method: 'POST',

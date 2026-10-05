@@ -94,7 +94,7 @@ def cookie_secure(request: Request) -> bool:
 async def require_suite_token(request: Request) -> None:
     """
     Gate for endpoints that are embedded unauthenticated (e.g. pktHub NOC
-    Builder widget iframes, see app/api/widgets.py) and therefore can't go
+    Builder widget iframes, see app/api/widgets/) and therefore can't go
     through the normal login/session flow, but still must not be reachable
     by literally anyone on the network. Requires a valid X-Suite-Token —
     the same trusted-proxy secret used by get_current_user above — and
