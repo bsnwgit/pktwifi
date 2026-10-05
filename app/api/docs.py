@@ -44,7 +44,9 @@ async def get_doc(slug: str) -> dict:
     """Return the raw markdown content of one doc, identified by filename stem."""
     if not re.fullmatch(r"[A-Za-z0-9_-]+", slug):
         raise HTTPException(400, "Invalid document identifier")
-    path = _docs_dir() / f"{slug}.md"
-    if not path.is_file():
+    # The path is taken from the directory listing, and the request's text is
+    # only compared with it, so nothing in it can ever become part of a path.
+    path = next((f for f in _docs_dir().glob("*.md") if f.stem == slug), None)
+    if path is None or not path.is_file():
         raise HTTPException(404, "Document not found")
     return {"slug": slug, "title": _title_from_filename(path.name), "content": path.read_text()}

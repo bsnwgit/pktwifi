@@ -419,13 +419,17 @@ if _frontend_dist.exists():
         # which its Python taint tracker doesn't recognise as a sanitizer.
         _dist_root = os.path.normpath(str(_frontend_dist))
         _candidate = os.path.normpath(os.path.join(_dist_root, full_path))
-        if not (_candidate == _dist_root or _candidate.startswith(_dist_root + os.sep)):
-            # Path traversal — this handler is unauthenticated and config.yaml
-            # sits two levels above dist, so "../../config.yaml" previously
-            # returned the JWT signing key and the credential encryption key.
-            raise HTTPException(status_code=404, detail="Not found")
-        static_file = Path(_candidate)
-        if static_file.exists() and static_file.is_file():
+        static_file = None
+        # The dist root itself (a request for "/") is not a file; it falls through
+        # to index.html below. Anything else must lie strictly inside it.
+        if _candidate != _dist_root:
+            if not _candidate.startswith(_dist_root + os.sep):
+                # Path traversal — this handler is unauthenticated and config.yaml
+                # sits two levels above dist, so "../../config.yaml" previously
+                # returned the JWT signing key and the credential encryption key.
+                raise HTTPException(status_code=404, detail="Not found")
+            static_file = Path(_candidate)
+        if static_file is not None and static_file.is_file():
             return FileResponse(str(static_file))
         index = _frontend_dist / "index.html"
         # index.html names the hashed bundles, so a cached copy pins the browser

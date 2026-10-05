@@ -447,14 +447,20 @@ async def restore_from_snapshot(user: AdminUser, snapshot_name: str, files: Opti
     `files` is an optional comma-separated subset of {pktwifi.db, config.yaml} —
     omit to restore everything present in the snapshot.
     """
-    if not re.fullmatch(r"backup_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}", snapshot_name):
+    if not re.fullmatch(r"backup_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}", snapshot_name):
         raise HTTPException(status_code=400, detail="Invalid snapshot name")
 
     settings = get_settings()
     s = await asyncio.to_thread(_read_backup_settings_sync, settings.db_path)
     backup_root = Path(s["backup_path"]).resolve()
-    snap_dir = (backup_root / snapshot_name).resolve()
-    if snap_dir.parent != backup_root or not snap_dir.is_dir():
+    # The directory is taken from the listing of the backup root, and the
+    # request's text is only compared with it. A symlink is refused: a snapshot
+    # that points somewhere else is not one of ours.
+    snap_dir = next(
+        (d for d in backup_root.iterdir() if d.name == snapshot_name and d.is_dir() and not d.is_symlink()),
+        None,
+    ) if backup_root.is_dir() else None
+    if snap_dir is None:
         raise HTTPException(status_code=404, detail="Snapshot not found")
 
     wanted = _parse_files_param(files)
