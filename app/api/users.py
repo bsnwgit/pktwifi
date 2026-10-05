@@ -182,10 +182,24 @@ async def delete_user(user_id: int, user: AdminUser, db: aiosqlite.Connection = 
 async def change_my_password(body: ChangePasswordRequest, user: CurrentUser, db: aiosqlite.Connection = Depends(get_db)):
     if user.get("_via_suite"):
         raise HTTPException(status_code=400, detail="Password managed by pktHub for suite-authenticated sessions")
-    async with db.execute("SELECT hashed_password FROM users WHERE id = ?", (user["id"],)) as cur:
+    async with db.execute(
+        f"SELECT hashed_password, {lockout.LOCK_COLUMNS} FROM users WHERE id = ?", (user["id"],)
+    ) as cur:
         row = await cur.fetchone()
+    # A wrong current password counts as a failed login, exactly as at the login
+    # form: a signed-in session must not be a free way to guess it. A locked
+    # account is refused before the password is looked at.
+    if row:
+        state = lockout.describe(row)
+        if state["locked"]:
+            raise lockout.locked_exception(state)
     if not row or not row["hashed_password"] or not verify_password(body.current_password, row["hashed_password"]):
+        if row:
+            state = await lockout.record_failure(db, user["id"])
+            if state["locked"]:
+                raise lockout.locked_exception(state)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
+    await lockout.record_success(db, user["id"])
     await db.execute(
         "UPDATE users SET hashed_password = ? WHERE id = ?",
         (hash_password(body.new_password), user["id"]),

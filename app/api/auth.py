@@ -32,15 +32,6 @@ class TokenResponse(BaseModel):
 
 # -- Local auth ------------------------------------------------------------------
 
-def _locked(state: dict) -> HTTPException:
-    # 423 rather than 401, so a client can tell "locked" from "wrong password".
-    if state["permanent"]:
-        detail = "This account is locked after repeated failed logins. Contact an administrator to unlock it."
-    else:
-        detail = f"This account is locked after repeated failed logins. Try again after {state['until']} UTC."
-    return HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail)
-
-
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, request: Request, response: Response, db: aiosqlite.Connection = Depends(get_db)):
     async with db.execute(
@@ -56,12 +47,12 @@ async def login(body: LoginRequest, request: Request, response: Response, db: ai
     # guessed at and a correct password does not get past the lock.
     state = lockout.describe(user)
     if state["locked"]:
-        raise _locked(state)
+        raise lockout.locked_exception(state)
 
     if not user["hashed_password"] or not verify_password(body.password, user["hashed_password"]):
         state = await lockout.record_failure(db, user["id"])
         if state["locked"]:
-            raise _locked(state)
+            raise lockout.locked_exception(state)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     await lockout.record_success(db, user["id"])
