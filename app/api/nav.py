@@ -19,7 +19,7 @@ from app.dependencies import require_suite_token
 
 # Fetched unauthenticated by pktHub's health poller, and it discloses this
 # app's page structure — so it carries the same X-Suite-Token gate as the
-# widget endpoints in app/api/widgets.py.
+# widget endpoints in app/api/widgets/.
 router = APIRouter(dependencies=[Depends(require_suite_token)])
 
 # ── Manifest ──────────────────────────────────────────────────────────────────

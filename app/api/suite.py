@@ -48,7 +48,9 @@ async def get_suite_token(request: Request, user: AdminUser):
             invalidate_settings_cache()
             token = new_token
         except Exception:
-            pass
+            # The caller is told there is no token rather than that this failed,
+            # so the reason has to be in the log.
+            log.exception("could not store a generated suite token")
 
     return JSONResponse({"suite_token": token, "has_token": bool(token)})
 
@@ -80,8 +82,10 @@ async def suite_register(request: Request, user: AdminUser):
             await db.commit()
         invalidate_settings_cache()
         return JSONResponse({"status": "ok"})
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+    except Exception:
+        # The exception text carries the database path and internal SQL — log it, don't return it.
+        log.exception("suite endpoint failed")
+        return JSONResponse({"error": "Internal error"}, status_code=500)
 
 
 @router.post("/regenerate")
@@ -104,8 +108,10 @@ async def regenerate_suite_token(request: Request, user: AdminUser):
             await db.commit()
         invalidate_settings_cache()
         return JSONResponse({"suite_token": new_token, "status": "regenerated"})
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+    except Exception:
+        # The exception text carries the database path and internal SQL — log it, don't return it.
+        log.exception("suite endpoint failed")
+        return JSONResponse({"error": "Internal error"}, status_code=500)
 
 
 @router.post("/settings-lock")
@@ -141,8 +147,10 @@ async def set_settings_lock(request: Request, user: CurrentUser):
                 (json.dumps(locked),)
             )
             await db.commit()
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+    except Exception:
+        # The exception text carries the database path and internal SQL — log it, don't return it.
+        log.exception("suite endpoint failed")
+        return JSONResponse({"error": "Internal error"}, status_code=500)
 
     return JSONResponse({"hub_settings_managed": locked})
 

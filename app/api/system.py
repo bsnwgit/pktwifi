@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import shutil
@@ -24,6 +25,8 @@ from app.config import get_settings
 from app.dependencies import AdminUser, CurrentUser
 from app.backup import run_backup_sync, list_backups_sync, _read_backup_settings_sync
 from app.version import get_version
+
+log = logging.getLogger("pktwifi.api.system")
 
 router = APIRouter()
 
@@ -142,8 +145,10 @@ def _cert_info() -> dict:
         except Exception:
             pass
         return info
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        # The text can name the certificate path and openssl's own output.
+        log.exception("could not read the TLS certificate")
+        return {"error": "Could not read the certificate"}
 
 
 @router.get("/ssl/status")
@@ -425,8 +430,9 @@ async def import_bundle(user: AdminUser, file: UploadFile = File(...), files: Op
             try:
                 with tarfile.open(str(archive_path), "r:gz") as tar:
                     _safe_extract_tar(tar, tmp_path)
-            except Exception as e:
-                return {"error": f"Failed to extract archive: {e}"}
+            except Exception:
+                log.exception("restore: could not extract the uploaded archive")
+                return {"error": "Failed to extract archive — is it a pktWiFi backup (.tar.gz)?"}
 
             return _restore_from_dir(tmp_path, settings, wanted)
 

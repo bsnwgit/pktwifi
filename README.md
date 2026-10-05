@@ -647,7 +647,7 @@ Three Dashboard visuals are now NOC widgets: **Airtime by Band** (average channe
 
 ### Widget endpoints now require the suite token
 
-`app/api/widgets.py` previously mounted its router with a bare `APIRouter()`,
+`app/api/widgets/` previously mounted its router with a bare `APIRouter()`,
 so the server-rendered widget views — which read internal data — answered
 anyone who could reach the port. The router now carries
 `dependencies=[Depends(require_suite_token)]`, matching the NOC Builder's
@@ -878,7 +878,7 @@ Point resonance's **READ SPEC** at `/api/resonance/openapi.json`. The published 
 
 Every call is made by pktWiFi's own page, same-origin, on the session of the person already signed
 in, so nothing here reaches data that person could not already open. Which operations exist is
-fixed in `app/api/resonance_data.py`, not configurable per install. Write operations are withheld
+fixed in `app/api/resonance_data/`, not configurable per install. Write operations are withheld
 from the grant entirely until an administrator sets a role to **Read and write**.
 
 **Never exposed:** a collector's stored controller credentials. Nothing here changes a channel or transmit power, deauthenticates a client, or creates, edits or deletes an access point, SSID, radio or collector. The app has no rule-toggle endpoint, so the assistant's writes are acknowledge-only.

@@ -130,7 +130,8 @@ async def _resolve_https_base(client: httpx.AsyncClient, base: str, probe_path: 
         probe = await client.get(f"{base}{probe_path}", follow_redirects=True)
         port = f":{probe.url.port}" if probe.url.port else ""
         return f"{probe.url.scheme}://{probe.url.host}{port}"
-    except Exception:
+    except Exception as exc:
+        log.debug(f"HTTPS probe of {base} failed ({type(exc).__name__}); using the configured URL")
         return base  # best-effort — fall back to the configured URL if the probe itself fails
 
 
@@ -233,13 +234,15 @@ class UnifiCollector(Collector):
                     dr = await client.get(f"{integration_base}/sites/{site_id}/devices/{dev_id}")
                     dr.raise_for_status()
                     radio_detail[dev_id] = (dr.json().get("interfaces") or {}).get("radios") or []
-                except Exception:
+                except Exception as exc:
+                    log.warning(f"UniFi device {dev_id}: radio detail unavailable ({type(exc).__name__}) — reporting it without radios")
                     radio_detail[dev_id] = []
                 try:
                     sr = await client.get(f"{integration_base}/sites/{site_id}/devices/{dev_id}/statistics/latest")
                     sr.raise_for_status()
                     device_stats[dev_id] = sr.json() or {}
-                except Exception:
+                except Exception as exc:
+                    log.warning(f"UniFi device {dev_id}: statistics unavailable ({type(exc).__name__})")
                     device_stats[dev_id] = {}
 
         result = PollResult()

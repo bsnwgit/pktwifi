@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.database import get_db
+from app.errors import describe_exception
 from app.dependencies import CurrentUser, AdminUser
 from app.wifi.collectors.crypto import encrypt_str, decrypt_config
 
@@ -140,7 +141,7 @@ class CredentialTestRequest(BaseModel):
 
 def _exc_detail(exc: Exception) -> str:
     # Same convention as poll_now: some httpx exceptions have an empty str().
-    return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+    return describe_exception(exc, with_type=True)
 
 
 @router.post("/{cred_id}/test")

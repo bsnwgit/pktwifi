@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.database import get_db
 from app.dependencies import AdminUser, CurrentUser
+from app.sqlutil import Where
 from app.wifi.collectors.crypto import decrypt_str
 
 router = APIRouter()
@@ -48,34 +49,28 @@ async def get_logs(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
-    conditions: list[str] = []
-    params: list = []
+    w = Where()
 
     if level:
         level_no = _LEVEL_MAP.get(level.upper())
         if level_no is not None:
-            conditions.append("level_no >= ?")
-            params.append(level_no)
+            w.add("level_no >= ?", level_no)
 
     if logger:
-        conditions.append("logger LIKE ?")
-        params.append(f"{logger}%")
+        w.add("logger LIKE ?", f"{logger}%")
 
     if search:
-        conditions.append("message LIKE ?")
-        params.append(f"%{search}%")
+        w.add("message LIKE ?", f"%{search}%")
 
     if since:
-        conditions.append("created_at >= ?")
-        params.append(since)
+        w.add("created_at >= ?", since)
 
     if until:
-        conditions.append("created_at <= ?")
-        params.append(until)
+        w.add("created_at <= ?", until)
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    where = w.sql
 
-    async with db.execute(f"SELECT COUNT(*) FROM app_logs {where}", params) as cur:
+    async with db.execute(f"SELECT COUNT(*) FROM app_logs {where}", w.params) as cur:
         total = (await cur.fetchone())[0]
 
     async with db.execute(
@@ -86,7 +81,7 @@ async def get_logs(
         ORDER BY id DESC
         LIMIT ? OFFSET ?
         """,
-        params + [limit, offset],
+        w.with_params(limit, offset),
     ) as cur:
         rows = await cur.fetchall()
 

@@ -5,6 +5,7 @@ poller + vendor controller API integrations).
 from __future__ import annotations
 
 import json
+import logging
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +15,8 @@ from app.database import get_db
 from app.dependencies import CurrentUser, AdminUser
 from app.wifi.collectors.registry import COLLECTOR_TYPES
 from app.wifi.collectors.crypto import encrypt_config, decrypt_config
+
+log = logging.getLogger("pktwifi.api.collectors")
 
 router = APIRouter()
 
@@ -37,6 +40,7 @@ def _collector_out(r, reveal_config: bool = False) -> dict:
         try:
             out["config"] = decrypt_config(r["config_json"])
         except Exception:
+            log.warning("collector %s: stored config could not be read", r["id"], exc_info=True)
             out["config"] = {}
     return out
 

@@ -93,4 +93,5 @@ class Collector(ABC):
             result = await self.poll()
             return True, f"OK — {len(result.access_points)} access point(s) found"
         except Exception as exc:
-            return False, str(exc)
+            from app.errors import describe_exception
+            return False, describe_exception(exc)

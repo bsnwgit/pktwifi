@@ -101,6 +101,7 @@ def run_backup_sync(db_path: str) -> dict:
             finally:
                 verify.close()
         except Exception as e:
+            log.warning(f"Backup {dest.name}: integrity check could not run: {e}")
             check = f"verification failed: {e}"
 
         if check == "ok":

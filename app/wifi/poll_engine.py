@@ -13,6 +13,7 @@ from typing import Optional
 
 import aiosqlite
 
+from app.errors import describe_exception
 from app.wifi.collectors.base import PollResult
 from app.wifi.collectors.crypto import decrypt_config, decrypt_str
 from app.wifi.collectors.registry import get_collector_instance
@@ -346,7 +347,7 @@ async def poll_and_store(db: aiosqlite.Connection, row: aiosqlite.Row) -> PollRe
         await db.commit()
         return result
     except Exception as exc:
-        detail = str(exc) or type(exc).__name__
+        detail = describe_exception(exc)
         if isinstance(exc, asyncio.TimeoutError):
             detail = f"Controller did not answer within {_POLL_TIMEOUT_SECONDS} seconds"
         log.warning(f"Collector '{row['name']}' poll failed: {detail}")

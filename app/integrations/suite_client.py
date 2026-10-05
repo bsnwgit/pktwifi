@@ -22,6 +22,8 @@ from typing import Any, Optional
 
 import httpx
 
+from app.errors import describe_exception, redact
+
 log = logging.getLogger("pktwifi.integrations")
 
 
@@ -85,10 +87,10 @@ class SuiteClient:
             # as a generic connection problem. Name it — the fix is a checkbox
             # on this form, and nothing else in the message points at it.
             if "certificate" in str(exc).lower() or "ssl" in str(exc).lower():
-                return False, (f"TLS certificate was not trusted: {exc} — if this app uses a "
+                return False, (f"TLS certificate was not trusted: {redact(str(exc))} — if this app uses a "
                                "self-signed certificate, untick 'Verify TLS certificate'")
-            return False, f"could not connect to host/port: {exc}"
+            return False, f"could not connect to host/port: {redact(str(exc))}"
         except httpx.TimeoutException:
             return False, "connection timed out"
         except Exception as exc:
-            return False, str(exc)
+            return False, describe_exception(exc)
