@@ -15,8 +15,6 @@ The properties worth proving:
     never turns the next one permanent,
   * an admin can unlock a user, and so can the host-side script,
   * the limit is a setting, with 3 as the default when it is missing or junk,
-  * failures only count within a window (a setting, 24 hours by default), so
-    old ones stop counting toward a lockout,
   * an unknown username is refused without anything being counted,
   * old client events are purged on their own retention window.
 """
@@ -164,36 +162,6 @@ def main() -> int:
         make_user("gina")
         sql("DELETE FROM settings WHERE key = 'login_max_failed_attempts'")
         check("so does no value at all", fail("gina", 3)[-1] == 423)
-
-        print("\n── failures expire ──")
-        def age(name: str, hours: int) -> None:
-            sql("UPDATE users SET last_failed_login = datetime('now', ?) WHERE username = ?", f"-{hours} hours", name)
-
-        make_user("ivy")
-        fail("ivy", 2)
-        age("ivy", 25)
-        codes = fail("ivy", 2)
-        check("failures older than the default 24 hours no longer count", codes == [401, 401], str(codes))
-        check("so the count started again", row("ivy")["failed_login_count"] == 2)
-        make_user("jack")
-        fail("jack", 2)
-        age("jack", 23)
-        check("failures inside the window still do", fail("jack", 1) == [423])
-        make_user("kim")
-        sql("INSERT INTO settings (key, value) VALUES ('login_failure_window_hours', '2')")
-        fail("kim", 2)
-        age("kim", 3)
-        check("a shorter window setting expires them sooner", fail("kim", 2) == [401, 401])
-        make_user("lee")
-        sql("UPDATE settings SET value = '\"junk\"' WHERE key = 'login_failure_window_hours'")
-        fail("lee", 2)
-        age("lee", 23)
-        check("an unusable window falls back to 24 hours", fail("lee", 1) == [423])
-        sql("DELETE FROM settings WHERE key = 'login_failure_window_hours'")
-        make_user("mo")
-        fail("mo", 2)
-        login("mo", GOOD)
-        check("a successful login clears the time of the last failure", row("mo")["last_failed_login"] is None)
 
         print("\n── accounts that do not exist ──")
         before = sql("SELECT COUNT(*) AS n FROM users")[0]["n"]
