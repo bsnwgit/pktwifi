@@ -160,8 +160,8 @@ def list_backups_sync(db_path: str) -> list[dict]:
                 "size_bytes": size,
                 "files": files,
             })
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Skipping unreadable backup {snap.name}: {e}")
     return result
 
 
