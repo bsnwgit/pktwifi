@@ -891,9 +891,9 @@ async def widget_airtime_trend(hours: int = 6):
 async def widget_rf_spectrum():
     from app.wifi.rf import BANDS, band_axis, occupied_span
     rows = await _rows(
-        """SELECT ap.name AS ap_name, r.band, r.channel, r.channel_width_mhz, r.utilization_pct
+        f"""SELECT ap.name AS ap_name, r.band, r.channel, r.channel_width_mhz, r.utilization_pct
            FROM radios r JOIN access_points ap ON ap.id = r.access_point_id
-           WHERE r.band IN ('2.4GHz','5GHz','6GHz')"""
+           WHERE r.band IN ('2.4GHz','5GHz','6GHz') AND {radio_is_current()}"""
     )
     placed = []
     for r in rows:
@@ -946,9 +946,9 @@ async def widget_signal_scope():
     import zlib
     from app.wifi.rf import SIGNAL_FAIR_DBM, SIGNAL_GOOD_DBM
     rows = await _rows(
-        """SELECT ap.id AS ap_id, ap.name AS ap_name, c.rssi_dbm, c.mac_address
+        f"""SELECT ap.id AS ap_id, ap.name AS ap_name, c.rssi_dbm, c.mac_address
            FROM wifi_clients c JOIN access_points ap ON ap.id = c.access_point_id
-           WHERE c.rssi_dbm IS NOT NULL AND c.last_seen >= datetime(ap.last_seen, '-60 seconds')"""
+           WHERE c.rssi_dbm IS NOT NULL AND {client_is_current()}"""
     )
     if not rows:
         return HTMLResponse(_page("Signal Scope", _empty('No client is reporting a signal')))

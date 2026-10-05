@@ -143,7 +143,11 @@ async def get_access_point(ap_id: int, user: CurrentUser, db: aiosqlite.Connecti
     if not row:
         raise HTTPException(status_code=404, detail="Access point not found")
     out = _ap_out(row)
-    async with db.execute("SELECT * FROM radios WHERE access_point_id = ? ORDER BY band", (ap_id,)) as cur:
+    async with db.execute(
+        f"""SELECT r.* FROM radios r JOIN access_points ap ON ap.id = r.access_point_id
+            WHERE r.access_point_id = ? AND {radio_is_current()} ORDER BY r.band""",
+        (ap_id,),
+    ) as cur:
         radios = await cur.fetchall()
     out["radios"] = [
         {
