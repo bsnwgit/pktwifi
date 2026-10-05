@@ -491,8 +491,13 @@ own left-hand sub-tab strip:
   reset a user's password, filter/sort the list, and mark one active admin
   as the **default admin** (the star icon): when every auth method is
   disabled, the app skips the login page and signs everyone in as that
-  account, so there's always a way in.
-- **Auth** — toggle local username/password auth, set the session timeout,
+  account, so there's always a way in. A local account is locked for 30
+  minutes after repeated failed logins and, if it fails again after that,
+  until an admin unlocks it (unlock icon; `scripts/unlock_user.py` from the
+  host if the only admin is locked).
+- **Auth** — toggle local username/password auth, set the session timeout
+  how many failed logins lock an account (default 3) and the window they
+  count within (default 24 hours),
   and configure SAML 2.0 SSO (paste IdP metadata XML to auto-fill Entity
   ID/SSO URL/certificate, or fill them in by hand; the ACS URL and SP
   metadata link are derived from **Base URL** on the General tab, so set
@@ -513,7 +518,7 @@ own left-hand sub-tab strip:
 
 - **Storage** — pktWiFi is SQLite-only; there's no analytical-backend
   picker here (unlike some sibling apps). What you do configure is
-  **retention**: days to keep resolved alert events, and days to keep raw
+  **retention**: days to keep resolved alert events, client events and raw
   RF metric history, plus a **Run Cleanup Now** button
   (`POST /api/system/cleanup`) to apply the current thresholds immediately
   instead of waiting for the once-daily scheduled pass.

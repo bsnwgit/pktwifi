@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.dependencies import CurrentUser, AdminUser
+from app.auth import lockout
 from app.auth.local import hash_password, verify_password
 
 router = APIRouter()
@@ -39,6 +40,9 @@ class ResetPasswordRequest(BaseModel):
 
 
 def _user_out(row) -> dict:
+    # Rows from the list query carry the lock columns; others (create, the
+    # suite-token /me) do not, and are simply not locked.
+    lock = lockout.describe(row) if "temp_locked" in row.keys() else {"locked": False, "permanent": False, "until": None}
     return {
         "id": row["id"],
         "username": row["username"],
@@ -50,6 +54,9 @@ def _user_out(row) -> dict:
         "created_at": row["created_at"],
         "last_login": row["last_login"],
         "has_password": bool(row["hashed_password"]) if "hashed_password" in row.keys() else True,
+        "is_locked": lock["locked"],
+        "lock_permanent": lock["permanent"],
+        "locked_until": lock["until"],
     }
 
 
@@ -61,7 +68,7 @@ async def get_me(user: CurrentUser, db: aiosqlite.Connection = Depends(get_db)):
             "is_active": True, "auth_provider": "suite", "created_at": user["created_at"],
             "last_login": None, "has_password": False,
         }
-    async with db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)) as cur:
+    async with db.execute(f"SELECT *, {lockout.TEMP_LOCKED} FROM users WHERE id = ?", (user["id"],)) as cur:
         row = await cur.fetchone()
     return _user_out(row)
 
@@ -69,8 +76,8 @@ async def get_me(user: CurrentUser, db: aiosqlite.Connection = Depends(get_db)):
 @router.get("")
 async def list_users(user: AdminUser, db: aiosqlite.Connection = Depends(get_db)):
     async with db.execute(
-        "SELECT id, username, email, role, is_active, is_default_admin, auth_provider, created_at, last_login "
-        "FROM users ORDER BY username"
+        f"SELECT id, username, email, role, is_active, is_default_admin, auth_provider, created_at, last_login, "
+        f"{lockout.LOCK_COLUMNS} FROM users ORDER BY username"
     ) as cur:
         rows = await cur.fetchall()
     return [_user_out(r) for r in rows]
@@ -120,7 +127,7 @@ async def update_user(user_id: int, body: UpdateUserRequest, user: AdminUser, db
         await db.commit()
     except aiosqlite.IntegrityError:
         raise HTTPException(status_code=409, detail="Username or email already exists")
-    async with db.execute("SELECT * FROM users WHERE id = ?", (user_id,)) as cur:
+    async with db.execute(f"SELECT *, {lockout.TEMP_LOCKED} FROM users WHERE id = ?", (user_id,)) as cur:
         row = await cur.fetchone()
     return _user_out(row)
 
@@ -135,6 +142,14 @@ async def reset_user_password(user_id: int, body: ResetPasswordRequest, user: Ad
             raise HTTPException(status_code=404, detail="User not found")
     await db.execute("UPDATE users SET hashed_password = ? WHERE id = ?", (hash_password(body.new_password), user_id))
     await db.commit()
+
+
+@router.post("/{user_id}/unlock", status_code=204)
+async def unlock_user(user_id: int, user: AdminUser, db: aiosqlite.Connection = Depends(get_db)):
+    """Admin-only: lift a failed-login lockout, temporary or permanent, and
+    clear the failure count and the record of earlier lockouts."""
+    if not await lockout.unlock(db, user_id):
+        raise HTTPException(status_code=404, detail="User not found")
 
 
 @router.patch("/{user_id}/set-default-admin", status_code=204)

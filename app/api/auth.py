@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from app.auth.local import verify_password, create_access_token, create_refresh_token, decode_refresh_token
+from app.auth import lockout
 from app.auth import saml as saml_auth
 from app.database import get_db
 from app.dependencies import cookie_secure
@@ -31,10 +32,19 @@ class TokenResponse(BaseModel):
 
 # -- Local auth ------------------------------------------------------------------
 
+def _locked(state: dict) -> HTTPException:
+    # 423 rather than 401, so a client can tell "locked" from "wrong password".
+    if state["permanent"]:
+        detail = "This account is locked after repeated failed logins. Contact an administrator to unlock it."
+    else:
+        detail = f"This account is locked after repeated failed logins. Try again after {state['until']} UTC."
+    return HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail)
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, request: Request, response: Response, db: aiosqlite.Connection = Depends(get_db)):
     async with db.execute(
-        "SELECT id, hashed_password, role, is_active FROM users WHERE username = ? OR email = ?",
+        f"SELECT id, hashed_password, role, is_active, {lockout.LOCK_COLUMNS} FROM users WHERE username = ? OR email = ?",
         (body.username, body.username),
     ) as cur:
         user = await cur.fetchone()
@@ -42,9 +52,19 @@ async def login(body: LoginRequest, request: Request, response: Response, db: ai
     if not user or not user["is_active"]:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    # Refused before the password is looked at, so a locked account cannot be
+    # guessed at and a correct password does not get past the lock.
+    state = lockout.describe(user)
+    if state["locked"]:
+        raise _locked(state)
+
     if not user["hashed_password"] or not verify_password(body.password, user["hashed_password"]):
+        state = await lockout.record_failure(db, user["id"])
+        if state["locked"]:
+            raise _locked(state)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    await lockout.record_success(db, user["id"])
     await db.execute("UPDATE users SET last_login = datetime('now'), auth_provider = 'local' WHERE id = ?", (user["id"],))
     await db.commit()
 

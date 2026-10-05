@@ -69,8 +69,9 @@ COLLECTOR_TYPES: dict[str, dict] = {
             toggle("udm", "UDM / UDM-Pro / Cloud Key Gen2+", default=False,
                    show_if=("auth_method", "userpass"),
                    help="Enable if this is a UniFi OS console, not a standalone controller app"),
-            toggle("verify_tls", "Verify TLS certificate", default=False,
-                   help="Most on-prem controllers use a self-signed cert"),
+            toggle("verify_tls", "Verify TLS certificate", default=True,
+                   help="On by default. Turn it off for an on-prem controller with a self-signed "
+                        "certificate — credentials then travel over an unverified connection"),
         ],
     },
     "aruba_central": {

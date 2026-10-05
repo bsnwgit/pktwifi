@@ -27,6 +27,13 @@ Prompts for install directory and port, then handles the venv, `config.yaml` + s
 
 All roles can view every page; analysts and admins can acknowledge/resolve alerts; only admins reach Settings. Manage accounts at Settings → Security → Users — create/edit/deactivate/delete, reset password, and mark one active admin as the **default admin** (star icon): if every auth method is ever disabled, the app auto-signs everyone in as that account instead of dead-ending.
 
+**Failed-login lockout.** A local account is locked for 30 minutes after a set number of failed logins (Settings → Security → Auth → *Failed logins before lockout*, default 3) inside a time window (*Failed login window*, default 24 hours — older failures stop counting). If it then fails that many times again it stays locked until an admin clicks the unlock icon beside it on the Users tab. While locked, even the right password is refused. A successful login clears the failure count and any earlier lockout. If the only admin is locked, unlock it from the server, in the install directory with the app's own Python:
+
+```bash
+python3 scripts/unlock_user.py <username>
+```
+
+
 ### Okta SAML SSO
 
 Settings → Security → Auth: paste Okta's IdP metadata XML (auto-fills SSO URL/Entity ID/certificate) or enter by hand. ACS URL and SP metadata link are derived from **Base URL** — set that first.
@@ -53,7 +60,15 @@ The old standalone Collectors and Integrations nav items are gone — everything
 
 Each controller row is a name, type, poll interval, enabled toggle, and a **schema-driven config form** (real inputs with per-field help and conditional fields, not a raw JSON textarea — though "Edit as JSON" is still available as an escape hatch). Reference a saved credential via a typed dropdown filtered to that controller type's relevant credential kinds, instead of retyping secrets. Deleting a credential still in use is blocked, and the error names which controller(s) reference it.
 
-**Test Credentials** in the controller form runs a real, save-nothing auth attempt (UniFi login/Integration API call, Meraki `/organizations` call, or an SNMP `sysDescr` GET) and shows pass/fail with the full error — verify before you ever poll the controller for real. **Poll Now** on a saved controller polls immediately instead of waiting for its interval.
+**Test Credentials** in the controller form runs a real, save-nothing auth attempt (UniFi login/Integration API call, Meraki `/organizations` call, or an SNMP `sysDescr` GET) and shows pass/fail with the full error — verify before you ever poll the controller for real. **Poll Now** on a saved controller polls immediately instead of waiting for its interval, and stores the result the same way a scheduled poll does. It is refused while that controller is already being polled.
+
+### Polling and TLS
+
+Controllers are polled in parallel, at most four at a time, so one slow controller does not hold up the rest. A poll that gets no answer within 180 seconds is cut off and recorded as an error. A controller is never polled again while its previous poll is still running.
+
+If a controller answers a poll with no access points while some are on record, pktWiFi asks it again twice before believing it. If it is still empty, the access points and clients already stored are **kept** and the controller shows an error saying so. A controller that really has no access points left stays in that state until you remove its collector.
+
+**Verify TLS certificate** is on for new UniFi controllers. Controllers added before it became the default were running unverified, so they were set to off to keep them working; tick it once the controller's certificate is trusted. Turn it off for a controller with a self-signed certificate — its credentials then travel over a connection that is not checked.
 
 ### UniFi — two auth methods
 
@@ -75,7 +90,7 @@ A notification is sent when an alert *opens*, not on every 30-second evaluation 
 
 ## Storage & retention
 
-pktWiFi is SQLite-only — there's no analytical-backend picker like pktsnmp/pktflow's ClickHouse/DuckDB option. Data → Storage instead configures **retention**: days to keep resolved alert events and raw RF metric history, plus a **Run Cleanup Now** button to apply the current thresholds immediately instead of waiting for the daily scheduled pass. If RF metric volume ever grows large enough to need it, a ClickHouse/DuckDB backend abstraction would need to be built following the pattern already established in pktsnmp — not present in this app today.
+pktWiFi is SQLite-only — there's no analytical-backend picker like pktsnmp/pktflow's ClickHouse/DuckDB option. Data → Storage instead configures **retention**: days to keep resolved alert events, client events (associate, roam, auth failures; default 90) and raw RF metric history, plus a **Run Cleanup Now** button to apply the current thresholds immediately instead of waiting for the daily scheduled pass. If RF metric volume ever grows large enough to need it, a ClickHouse/DuckDB backend abstraction would need to be built following the pattern already established in pktsnmp — not present in this app today.
 
 ## Backup & Restore
 

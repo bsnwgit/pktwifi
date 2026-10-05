@@ -111,37 +111,30 @@ async def delete_collector(collector_id: int, user: AdminUser, db: aiosqlite.Con
 
 @router.post("/{collector_id}/poll-now")
 async def poll_now(collector_id: int, user: AdminUser, db: aiosqlite.Connection = Depends(get_db)):
+    """Poll now and store the result, exactly as a scheduled poll does — the
+    same code, the same empty-result protection, the same concurrency cap."""
     async with db.execute("SELECT * FROM collectors WHERE id = ?", (collector_id,)) as cur:
         row = await cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Collector not found")
 
-    from app.wifi.collectors.registry import get_collector_instance
-    from app.wifi.poll_engine import resolve_credential
+    from app.wifi import poll_engine
+    engine = poll_engine.PollEngine._instance
+    if engine is not None and not engine.try_claim(collector_id):
+        raise HTTPException(status_code=409, detail="This collector is already being polled — try again in a moment")
     try:
-        config = await resolve_credential(db, decrypt_config(row["config_json"]))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    collector = get_collector_instance(row["collector_type"], config)
-    if collector is None:
-        raise HTTPException(status_code=400, detail="Collector type is not implemented yet")
-    try:
-        result = await collector.poll()
-    except Exception as exc:
-        # Some exceptions (e.g. httpx.ConnectTimeout) have an empty str() —
-        # always include the exception type name so the user never sees a
-        # blank error message.
-        detail = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
-        await db.execute(
-            "UPDATE collectors SET status = 'error', last_error = ?, last_poll_at = datetime('now') WHERE id = ?",
-            (detail, collector_id),
-        )
-        await db.commit()
-        raise HTTPException(status_code=502, detail=f"Poll failed: {detail}")
-
-    await db.execute(
-        "UPDATE collectors SET status = 'ok', last_error = NULL, last_poll_at = datetime('now') WHERE id = ?",
-        (collector_id,),
-    )
-    await db.commit()
+        await db.execute(f"PRAGMA busy_timeout={poll_engine._DB_BUSY_TIMEOUT_MS}")
+        try:
+            if engine is not None:
+                async with engine.slots:
+                    result = await poll_engine.poll_and_store(db, row)
+            else:
+                result = await poll_engine.poll_and_store(db, row)
+        except poll_engine.PollFailed as exc:
+            if exc.config:
+                raise HTTPException(status_code=400, detail=exc.detail)
+            raise HTTPException(status_code=502, detail=f"Poll failed: {exc.detail}")
+    finally:
+        if engine is not None:
+            engine.release(collector_id)
     return {"status": "ok", "access_points": len(result.access_points), "clients": len(result.clients)}

@@ -11,10 +11,14 @@ written to config.yaml, the same way secret_key is handled for JWT signing.
 from __future__ import annotations
 
 import json
+import logging
+from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import get_settings
+
+log = logging.getLogger("pktwifi.crypto")
 
 
 def _fernet() -> Fernet:
@@ -26,6 +30,11 @@ def _fernet() -> Fernet:
             "(generate with: python3 -c \"from cryptography.fernet import Fernet; "
             "print(Fernet.generate_key().decode())\")"
         )
+    return _fernet_for(key)
+
+
+@lru_cache(maxsize=2)
+def _fernet_for(key: str) -> Fernet:
     return Fernet(key.encode())
 
 
@@ -41,6 +50,9 @@ def decrypt_str(token: str | None) -> str:
     try:
         return _fernet().decrypt(token.encode()).decode()
     except InvalidToken:
+        # Still returns "" (callers rely on it), but say why: a rotated or
+        # wrong credential_key otherwise shows up only as a vendor auth error.
+        log.warning("Could not decrypt a stored credential — credential_key may have changed")
         return ""
 
 
@@ -54,4 +66,5 @@ def decrypt_config(token: str) -> dict:
     try:
         return json.loads(_fernet().decrypt(token.encode()).decode())
     except InvalidToken:
+        log.warning("Could not decrypt a collector config — credential_key may have changed")
         return {}
