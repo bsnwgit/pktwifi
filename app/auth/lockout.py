@@ -1,10 +1,10 @@
 """
 Failed-login lockout for local accounts.
 
-Failed password attempts against an existing account count up to a limit (the
-`login_max_failed_attempts` setting, default 3) within a window (the
-`login_failure_window_hours` setting, default 24): failures older than the
-window no longer count. Reaching the limit locks the account for 30 minutes. After that lock ends, reaching the limit again
+Consecutive failed password attempts against an existing account count up to a
+limit (the `login_max_failed_attempts` setting, default 3); they never expire,
+only a successful login resets the count. Reaching the limit locks the account
+for 30 minutes. After that lock ends, reaching the limit again
 locks it permanently, until an admin unlocks it. A successful login clears both
 the failure count and the record of earlier lockouts.
 
@@ -23,8 +23,6 @@ log = logging.getLogger("pktwifi.auth")
 LOCK_MINUTES = 30
 DEFAULT_MAX_ATTEMPTS = 3
 _MAX_ATTEMPTS_CEILING = 100
-DEFAULT_WINDOW_HOURS = 24
-_WINDOW_HOURS_CEILING = 8760
 
 # Selected alongside the user row so the lock state comes from the database's
 # own clock — locked_until is written with datetime('now', ...), and comparing
@@ -60,30 +58,23 @@ async def max_attempts(db: aiosqlite.Connection) -> int:
     return await _int_setting(db, "login_max_failed_attempts", DEFAULT_MAX_ATTEMPTS, _MAX_ATTEMPTS_CEILING)
 
 
-async def window_hours(db: aiosqlite.Connection) -> int:
-    return await _int_setting(db, "login_failure_window_hours", DEFAULT_WINDOW_HOURS, _WINDOW_HOURS_CEILING)
-
-
 async def record_failure(db: aiosqlite.Connection, user_id: int) -> dict:
     """Count one failed attempt and lock the account if that reaches the limit.
     One UPDATE does the counting and the locking, so two attempts arriving
     together cannot both read the same count. Returns the lock state after."""
     limit = await max_attempts(db)
-    window = f"-{await window_hours(db)} hours"
-    # Failures older than the window count as none; `prior` is what is left.
-    prior = "(CASE WHEN last_failed_login IS NULL OR last_failed_login < datetime('now', :window) THEN 0 ELSE failed_login_count END)"
     await db.execute(
         f"""UPDATE users SET
-              failed_login_count = CASE WHEN {prior} + 1 >= :limit THEN 0 ELSE {prior} + 1 END,
-              lockout_count = CASE WHEN {prior} + 1 >= :limit
+              failed_login_count = CASE WHEN failed_login_count + 1 >= :limit THEN 0
+                                        ELSE failed_login_count + 1 END,
+              lockout_count = CASE WHEN failed_login_count + 1 >= :limit
                                    THEN lockout_count + 1 ELSE lockout_count END,
-              is_locked = CASE WHEN {prior} + 1 >= :limit AND lockout_count + 1 >= 2
+              is_locked = CASE WHEN failed_login_count + 1 >= :limit AND lockout_count + 1 >= 2
                                THEN 1 ELSE is_locked END,
-              locked_until = CASE WHEN {prior} + 1 >= :limit AND lockout_count + 1 < 2
-                                  THEN datetime('now', '+{LOCK_MINUTES} minutes') ELSE locked_until END,
-              last_failed_login = datetime('now')
+              locked_until = CASE WHEN failed_login_count + 1 >= :limit AND lockout_count + 1 < 2
+                                  THEN datetime('now', '+{LOCK_MINUTES} minutes') ELSE locked_until END
             WHERE id = :id""",
-        {"limit": limit, "window": window, "id": user_id},
+        {"limit": limit, "id": user_id},
     )
     await db.commit()
     async with db.execute(f"SELECT username, {LOCK_COLUMNS} FROM users WHERE id = ?", (user_id,)) as cur:
@@ -98,16 +89,15 @@ async def record_failure(db: aiosqlite.Connection, user_id: int) -> dict:
 
 async def record_success(db: aiosqlite.Connection, user_id: int) -> None:
     await db.execute(
-        "UPDATE users SET failed_login_count = 0, lockout_count = 0, locked_until = NULL, "
-        "last_failed_login = NULL WHERE id = ?",
+        "UPDATE users SET failed_login_count = 0, lockout_count = 0, locked_until = NULL WHERE id = ?",
         (user_id,),
     )
 
 
 async def unlock(db: aiosqlite.Connection, user_id: int) -> bool:
     cur = await db.execute(
-        "UPDATE users SET failed_login_count = 0, lockout_count = 0, locked_until = NULL, is_locked = 0, "
-        "last_failed_login = NULL WHERE id = ?",
+        "UPDATE users SET failed_login_count = 0, lockout_count = 0, locked_until = NULL, is_locked = 0 "
+        "WHERE id = ?",
         (user_id,),
     )
     await db.commit()

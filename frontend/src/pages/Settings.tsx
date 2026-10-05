@@ -1299,7 +1299,7 @@ function UsersTab() {
           <p>Three roles: <span className="text-gray-300 font-medium">admin</span> (full access, including this Users tab, Collectors, and Integrations), <span className="text-gray-300 font-medium">analyst</span> (can edit access points, ack/resolve alerts), and <span className="text-gray-300 font-medium">viewer</span> (read-only).</p>
           <p>This tab only manages <span className="text-gray-300 font-medium">local accounts</span> — SAML SSO users are auto-provisioned on first login.</p>
           <p><span className="text-gray-300 font-medium">Deactivate</span> blocks login immediately without deleting the account or its history — prefer it over Delete for someone who's just leaving temporarily, since Delete is permanent.</p>
-          <p>After repeated failed logins an account is <span className="text-gray-300 font-medium">locked</span> for 30 minutes; if it then fails the same number of times again, it stays locked until you click the unlock icon here. The number of failures allowed, and how long a failure counts, are set on the Auth tab. If the only admin is locked, run <span className="text-gray-300 font-medium">scripts/unlock_user.py</span> on the server.</p>
+          <p>After repeated failed logins an account is <span className="text-gray-300 font-medium">locked</span> for 30 minutes; if it then fails the same number of times again, it stays locked until you click the unlock icon here. The number of failures allowed is set on the Auth tab. If the only admin is locked, run <span className="text-gray-300 font-medium">scripts/unlock_user.py</span> on the server.</p>
           <p>The <span className="text-yellow-400">★</span> marks the <span className="text-gray-300 font-medium">default admin</span> — when every auth method in the Auth tab is disabled, the app skips the login page entirely and signs everyone in as this account. Click the star on any active admin to reassign it.</p>
         </HelpButton>
       </div>
@@ -2508,7 +2508,7 @@ export default function Settings() {
     }
   }
   const authSave = useSave([
-    'auth_local_enabled', 'session_timeout_minutes', 'login_max_failed_attempts', 'login_failure_window_hours',
+    'auth_local_enabled', 'session_timeout_minutes', 'login_max_failed_attempts',
     'okta_saml_enabled', 'okta_saml_idp_entity_id', 'okta_saml_idp_sso_url',
     'okta_saml_idp_cert', 'okta_saml_sp_entity_id', 'okta_saml_sp_cert', 'okta_saml_sp_key',
   ], settings, load)
@@ -2769,12 +2769,6 @@ export default function Settings() {
                   <div className="flex items-center gap-3">
                     <NumberInput value={num('login_max_failed_attempts', 3)} onChange={v => set('login_max_failed_attempts', v)} min={1} max={100} />
                     <span className="text-sm text-white">attempts</span>
-                  </div>
-                </Field>
-                <Field label="Failed login window" hint="Failures older than this stop counting toward a lockout">
-                  <div className="flex items-center gap-3">
-                    <NumberInput value={num('login_failure_window_hours', 24)} onChange={v => set('login_failure_window_hours', v)} min={1} max={8760} />
-                    <span className="text-sm text-white">hours</span>
                   </div>
                 </Field>
 
