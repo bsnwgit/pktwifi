@@ -80,9 +80,15 @@ async def widget_noise_floor():
 
 
 # ── Radio Trend widget (chart) ────────────────────────────────────────────────
+# Metric name from the widget's saved config -> the column it reads. The column
+# put into the SELECT is always one of these literals, never the request's text.
 _RADIO_METRICS = {
-    "utilization_pct", "client_count", "noise_floor_dbm",
-    "retry_pct", "crc_error_pct", "tx_power_dbm",
+    "utilization_pct": "utilization_pct",
+    "client_count": "client_count",
+    "noise_floor_dbm": "noise_floor_dbm",
+    "retry_pct": "retry_pct",
+    "crc_error_pct": "crc_error_pct",
+    "tx_power_dbm": "tx_power_dbm",
 }
 
 
@@ -95,23 +101,22 @@ async def widget_radio_trend(
         return HTMLResponse(_page("Radio Trend", _needs('Select an access point and radio')))
     if ap_id and await _ap_name(ap_id) is None:
         return HTMLResponse(_page("Radio Trend", _gone(f"Access point {ap_id}")))
-    # Allow-list the column — it is interpolated into the SELECT, and a metric
-    # name arrives from the widget's saved config.
-    if metric not in _RADIO_METRICS:
-        metric = "utilization_pct"
+    # The column is interpolated into the SELECT, so it comes from the table
+    # above rather than from the request; an unknown metric falls back to the default.
+    column = _RADIO_METRICS.get(metric, "utilization_pct")
 
     hours = max(1, min(int(hours or 6), 720))
     rows  = await _rows(
-        f"SELECT ts, {metric} AS v FROM radio_metrics "
+        f"SELECT ts, {column} AS v FROM radio_metrics "
         "WHERE radio_id = ? AND ts >= ? AND "
-        f"{metric} IS NOT NULL ORDER BY ts ASC LIMIT 2000",
+        f"{column} IS NOT NULL ORDER BY ts ASC LIMIT 2000",
         (radio_id, _since(hours)),
     )
     if not rows:
         return HTMLResponse(_page("Radio Trend", _empty('No samples in window')))
 
     band = await _rows("SELECT band FROM radios WHERE id = ?", (radio_id,))
-    label = f"{band[0]['band']} {metric}" if band else metric
+    label = f"{band[0]['band']} {column}" if band else column
     body  = _line_chart([(label, [r["v"] for r in rows])])
     return HTMLResponse(_page(f"{label} — last {hours}h", body))
 

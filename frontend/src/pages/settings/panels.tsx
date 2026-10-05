@@ -391,24 +391,39 @@ export function CertTextarea({ value, onChange, rows = 4, placeholder = 'MIIDp�
 }
 
 // -- SAML metadata paste box -------------------------------------------------------
+// The XML is read by the server, not parsed here: it is untrusted input, and the
+// server's SAML parser refuses DTDs and entity declarations.
 export function MetadataPasteBox({ onParsed }: { onParsed: (r: { entity_id: string; sso_url: string; cert: string }) => void }) {
   const [xml, setXml] = useState('')
   const [status, setStatus] = useState<'idle' | 'ok' | 'error'>('idle')
   const [msg, setMsg] = useState('')
 
-  const handleChange = (raw: string) => {
-    setXml(raw)
-    if (!raw.trim()) { setStatus('idle'); setMsg(''); return }
-    const result = parseIdpMetadata(raw)
-    if (result.error) { setStatus('error'); setMsg(result.error) }
-    else { onParsed(result); setStatus('ok'); setMsg('Entity ID, SSO URL, and certificate populated below.') }
-  }
+  useEffect(() => {
+    if (!xml.trim()) { setStatus('idle'); setMsg(''); return }
+    // Wait for typing or a paste to settle, and ignore an answer to text that has since changed.
+    let stale = false
+    const timer = setTimeout(() => {
+      api.parseSamlMetadata(xml)
+        .then(r => {
+          if (stale) return
+          onParsed(r)
+          setStatus('ok')
+          setMsg('Entity ID, SSO URL, and certificate populated below.')
+        })
+        .catch(e => {
+          if (stale) return
+          setStatus('error')
+          setMsg(e.message || 'Could not read the metadata.')
+        })
+    }, 400)
+    return () => { stale = true; clearTimeout(timer) }
+  }, [xml])
 
   return (
     <div className="space-y-1.5">
       <textarea
         value={xml}
-        onChange={e => handleChange(e.target.value)}
+        onChange={e => setXml(e.target.value)}
         rows={5}
         placeholder={'<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" …>'}
         className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono resize-y"
@@ -417,30 +432,6 @@ export function MetadataPasteBox({ onParsed }: { onParsed: (r: { entity_id: stri
       {status === 'error' && <p className="text-xs text-red-400">✗ {msg}</p>}
     </div>
   )
-}
-
-export function parseIdpMetadata(xml: string): { entity_id: string; sso_url: string; cert: string; error?: string } {
-  try {
-    const doc = new DOMParser().parseFromString(xml, 'application/xml')
-    if (doc.querySelector('parsererror')) return { entity_id: '', sso_url: '', cert: '', error: 'Invalid XML — check the metadata and try again.' }
-
-    const root = doc.querySelector('EntityDescriptor') ?? doc.documentElement
-    const entity_id = root.getAttribute('entityID') ?? ''
-
-    const ssoNodes = Array.from(doc.querySelectorAll('SingleSignOnService'))
-    const redirect = ssoNodes.find(n => (n.getAttribute('Binding') ?? '').includes('HTTP-Redirect'))
-    const sso_url = (redirect ?? ssoNodes[0])?.getAttribute('Location') ?? ''
-
-    const keyDescs = Array.from(doc.querySelectorAll('KeyDescriptor'))
-    const signingKd = keyDescs.find(kd => !kd.getAttribute('use') || kd.getAttribute('use') === 'signing')
-    const x509El = signingKd?.querySelector('X509Certificate') ?? doc.querySelector('X509Certificate')
-    const cert = x509El?.textContent?.replace(/\s+/g, '') ?? ''
-
-    if (!entity_id && !sso_url && !cert) return { entity_id: '', sso_url: '', cert: '', error: 'No SAML IdP data found in this XML.' }
-    return { entity_id, sso_url, cert }
-  } catch {
-    return { entity_id: '', sso_url: '', cert: '', error: 'Failed to parse XML.' }
-  }
 }
 
 // -- Suite token display (inbound — pktHub calling into pktWiFi) -----------------
