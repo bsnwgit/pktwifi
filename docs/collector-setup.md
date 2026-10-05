@@ -141,7 +141,7 @@ under `/proxy/network`).
 
 Fields shown: Controller URL (no trailing slash), a **username/password
 credential** (picked from Settings -> Credentials), Site, the UDM toggle,
-and Verify TLS certificate.
+and Verify TLS certificate (on by default — turn it off only for a controller with a self-signed certificate).
 
 ```json
 {
@@ -150,7 +150,7 @@ and Verify TLS certificate.
   "credential_id": 2,
   "site": "default",
   "udm": false,
-  "verify_tls": false
+  "verify_tls": true
 }
 ```
 
@@ -198,7 +198,7 @@ this mode is UniFi-OS-only by definition).
   "auth_method": "api_key",
   "credential_id": 7,
   "site": "default",
-  "verify_tls": false
+  "verify_tls": true
 }
 ```
 

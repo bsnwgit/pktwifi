@@ -21,6 +21,26 @@ log = logging.getLogger("pktwifi.poll_engine")
 
 _TICK_SECONDS = 15
 
+# Controller polls run concurrently so one slow controller cannot hold up the
+# rest, but the number running at once is capped: every poll holds a database
+# connection and a controller session, and an unbounded burst (a restart finds
+# every collector due at once) is what would pull the host down.
+_MAX_CONCURRENT_POLLS = 4
+# A controller that accepts the connection and then never answers would
+# otherwise hold one of those slots forever.
+_POLL_TIMEOUT_SECONDS = 180
+# A poll that comes back with no access points while some are on record is
+# treated as a controller glitch, not as "everything was removed": it is asked
+# again before anything is believed.
+_EMPTY_POLL_RETRIES = 2
+_EMPTY_POLL_RETRY_DELAY_SECONDS = 5
+# Waiting on another poll's write lock; SQLite allows one writer at a time.
+_DB_BUSY_TIMEOUT_MS = 30_000
+
+
+class EmptyPollError(Exception):
+    """A collector reported zero access points while some are on record."""
+
 
 async def resolve_credential(db: aiosqlite.Connection, config: dict) -> dict:
     """If a controller's config references a saved credential (credential_id,
@@ -276,6 +296,100 @@ async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResu
     await db.execute("DELETE FROM wifi_clients WHERE access_point_id IS NULL")
     await db.commit()
 
+class PollFailed(Exception):
+    """A poll did not complete. `config` is True when the collector could not
+    even be started (bad credential, unknown type) rather than failing to poll;
+    the failure has already been logged and recorded on the collector row."""
+
+    def __init__(self, detail: str, config: bool = False) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.config = config
+
+
+async def _record_error(db: aiosqlite.Connection, collector_id: int, detail: str) -> None:
+    await db.execute(
+        "UPDATE collectors SET status = 'error', last_error = ?, last_poll_at = datetime('now') WHERE id = ?",
+        (detail, collector_id),
+    )
+    await db.commit()
+
+
+async def poll_and_store(db: aiosqlite.Connection, row: aiosqlite.Row) -> PollResult:
+    """Poll one collector, store what it returned, and record the outcome on its
+    row. Shared by the scheduler and the Poll Now button so both do the same
+    thing to the data. Raises PollFailed after recording an error."""
+    try:
+        config = await resolve_credential(db, decrypt_config(row["config_json"]))
+    except ValueError as exc:
+        log.warning(f"Collector '{row['name']}' credential resolution failed: {exc}")
+        await _record_error(db, row["id"], str(exc))
+        raise PollFailed(str(exc), config=True)
+    collector = get_collector_instance(row["collector_type"], config)
+    if collector is None:
+        # Record it and stamp last_poll_at. Returning bare left the row
+        # permanently "due" — every 15-second tick picked it up again,
+        # re-resolved its credential, and returned here, with nothing on the
+        # Collectors page to say why it never polled.
+        log.warning(f"Collector '{row['name']}' has unknown type '{row['collector_type']}'")
+        detail = f"Unknown collector type '{row['collector_type']}'"
+        await _record_error(db, row["id"], detail)
+        raise PollFailed(detail, config=True)
+    try:
+        result = await asyncio.wait_for(collector.poll(), _POLL_TIMEOUT_SECONDS)
+        result = await _confirm_not_empty(db, row, collector, result)
+        await _persist(db, row["id"], result)
+        await db.execute(
+            "UPDATE collectors SET status = 'ok', last_error = NULL, last_poll_at = datetime('now') WHERE id = ?",
+            (row["id"],),
+        )
+        await db.commit()
+        return result
+    except Exception as exc:
+        detail = str(exc) or type(exc).__name__
+        if isinstance(exc, asyncio.TimeoutError):
+            detail = f"Controller did not answer within {_POLL_TIMEOUT_SECONDS} seconds"
+        log.warning(f"Collector '{row['name']}' poll failed: {detail}")
+        # _persist writes row by row and only commits at its end; without
+        # this the commit in _record_error would also commit whatever a failed
+        # _persist had already written, leaving a half-applied poll.
+        await db.rollback()
+        await _record_error(db, row["id"], detail)
+        raise PollFailed(detail)
+
+
+async def _confirm_not_empty(db: aiosqlite.Connection, row: aiosqlite.Row,
+                             collector, result: PollResult) -> PollResult:
+    """_persist treats a poll as the full list of the controller's APs and
+    deletes whatever is missing from it, so an empty result — a controller
+    mid-restart, an API that answered with nothing — would wipe every AP and
+    client this collector has. Ask again; if it is still empty while rows
+    exist, refuse the poll so the stored data stays as it was. A controller
+    that really has none left shows up as this error until its collector is
+    removed."""
+    if result.access_points:
+        return result
+    async with db.execute(
+        "SELECT COUNT(*) FROM access_points WHERE collector_id = ?", (row["id"],)
+    ) as cur:
+        known = (await cur.fetchone())[0]
+    if not known:
+        return result
+    for attempt in range(1, _EMPTY_POLL_RETRIES + 1):
+        log.warning(
+            f"Collector '{row['name']}' returned no access points but {known} are on record "
+            f"— re-querying ({attempt}/{_EMPTY_POLL_RETRIES})"
+        )
+        await asyncio.sleep(_EMPTY_POLL_RETRY_DELAY_SECONDS)
+        result = await asyncio.wait_for(collector.poll(), _POLL_TIMEOUT_SECONDS)
+        if result.access_points:
+            return result
+    raise EmptyPollError(
+        f"Controller returned no access points after {_EMPTY_POLL_RETRIES + 1} attempts; "
+        f"the {known} on record were kept. If the controller really has none, remove this collector."
+    )
+
+
 
 class PollEngine:
     _instance: "Optional[PollEngine]" = None
@@ -284,6 +398,27 @@ class PollEngine:
         self.alert_engine = alert_engine
         self._task: Optional[asyncio.Task] = None
         self._db_path: str = ""
+        self._slots = asyncio.Semaphore(_MAX_CONCURRENT_POLLS)
+        # Collectors with a poll queued or running: a slow poll must not be
+        # picked up again by the next 15-second tick.
+        self._inflight: set[int] = set()
+        self._polls: set[asyncio.Task] = set()
+
+    @property
+    def slots(self) -> asyncio.Semaphore:
+        """The concurrency cap, so a manual poll counts against it too."""
+        return self._slots
+
+    def try_claim(self, collector_id: int) -> bool:
+        """Reserve a collector for a manual poll; False if one is already
+        queued or running."""
+        if collector_id in self._inflight:
+            return False
+        self._inflight.add(collector_id)
+        return True
+
+    def release(self, collector_id: int) -> None:
+        self._inflight.discard(collector_id)
 
     async def start(self, db_path: str) -> None:
         PollEngine._instance = self
@@ -297,6 +432,10 @@ class PollEngine:
                 await self._task
             except asyncio.CancelledError:
                 pass
+        for task in list(self._polls):
+            task.cancel()
+        if self._polls:
+            await asyncio.gather(*self._polls, return_exceptions=True)
 
     async def _run_loop(self) -> None:
         while True:
@@ -309,53 +448,40 @@ class PollEngine:
     async def _tick(self) -> None:
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
-            # SQLite defaults foreign_keys off per-connection — without this,
-            # the stale-AP cleanup in _persist wouldn't cascade to radios.
-            await db.execute("PRAGMA foreign_keys=ON")
             async with db.execute(
                 """SELECT * FROM collectors WHERE enabled = 1 AND
                    (last_poll_at IS NULL OR
                     last_poll_at < datetime('now', '-' || poll_interval_sec || ' seconds'))"""
             ) as cur:
                 due = await cur.fetchall()
-            for row in due:
-                await self._poll_one(db, row)
+        for row in due:
+            if row["id"] in self._inflight:
+                continue
+            self._inflight.add(row["id"])
+            task = asyncio.create_task(self._run_one(row))
+            self._polls.add(task)
+            task.add_done_callback(self._polls.discard)
+
+    async def _run_one(self, row: aiosqlite.Row) -> None:
+        """One poll on its own connection, inside a concurrency slot. Each poll
+        needs its own connection: a shared one would interleave their
+        transactions, and a rollback after one failure would undo another's."""
+        try:
+            async with self._slots:
+                async with aiosqlite.connect(self._db_path) as db:
+                    db.row_factory = aiosqlite.Row
+                    # SQLite defaults foreign_keys off per-connection — without this,
+                    # the stale-AP cleanup in _persist wouldn't cascade to radios.
+                    await db.execute("PRAGMA foreign_keys=ON")
+                    await db.execute(f"PRAGMA busy_timeout={_DB_BUSY_TIMEOUT_MS}")
+                    await self._poll_one(db, row)
+        except Exception as exc:
+            log.error(f"Collector '{row['name']}' poll task error: {exc}")
+        finally:
+            self._inflight.discard(row["id"])
 
     async def _poll_one(self, db: aiosqlite.Connection, row: aiosqlite.Row) -> None:
         try:
-            config = await resolve_credential(db, decrypt_config(row["config_json"]))
-        except ValueError as exc:
-            log.warning(f"Collector '{row['name']}' credential resolution failed: {exc}")
-            await db.execute(
-                "UPDATE collectors SET status = 'error', last_error = ?, last_poll_at = datetime('now') WHERE id = ?",
-                (str(exc), row["id"]),
-            )
-            await db.commit()
-            return
-        collector = get_collector_instance(row["collector_type"], config)
-        if collector is None:
-            # Record it and stamp last_poll_at. Returning bare left the row
-            # permanently "due" — every 15-second tick picked it up again,
-            # re-resolved its credential, and returned here, with nothing on the
-            # Collectors page to say why it never polled.
-            log.warning(f"Collector '{row['name']}' has unknown type '{row['collector_type']}'")
-            await db.execute(
-                "UPDATE collectors SET status = 'error', last_error = ?, last_poll_at = datetime('now') WHERE id = ?",
-                (f"Unknown collector type '{row['collector_type']}'", row["id"]),
-            )
-            await db.commit()
-            return
-        try:
-            result = await collector.poll()
-            await _persist(db, row["id"], result)
-            await db.execute(
-                "UPDATE collectors SET status = 'ok', last_error = NULL, last_poll_at = datetime('now') WHERE id = ?",
-                (row["id"],),
-            )
-        except Exception as exc:
-            log.warning(f"Collector '{row['name']}' poll failed: {exc}")
-            await db.execute(
-                "UPDATE collectors SET status = 'error', last_error = ?, last_poll_at = datetime('now') WHERE id = ?",
-                (str(exc), row["id"]),
-            )
-        await db.commit()
+            await poll_and_store(db, row)
+        except PollFailed:
+            pass  # already logged and recorded on the collector row

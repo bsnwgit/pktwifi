@@ -125,7 +125,8 @@ bcrypt plus JWT. Roles `admin` / `analyst` / `viewer`.
 |---|---|---|
 | 401 immediately after logging in | Clock skew invalidates the token's `exp` | `timedatectl`; fix NTP |
 | Cannot see or edit controllers | Collector management is admin-only | Needs `admin` |
-| Locked out of every account | No admin session left | Reset the hash against SQLite using the app's own venv for bcrypt |
+| "This account is locked after repeated failed logins" | Too many failed logins: locked 30 minutes the first time, until an admin unlocks it the second time | An admin clicks the unlock icon on Settings -> Security -> Users, or run `scripts/unlock_user.py <username>` on the server |
+| Locked out of every account | No admin session left, or the only admin is locked | Unlock with `scripts/unlock_user.py`; otherwise reset the hash against SQLite using the app's own venv for bcrypt |
 
 ```bash
 <INSTALL_DIR>/venv/bin/python -c "import bcrypt; print(bcrypt.hashpw(b'NewPassword1!', bcrypt.gensalt()).decode())"
@@ -270,6 +271,9 @@ snmpwalk -v2c -c <community> <AP_IP> sysUpTime.0
 | Client counts look low | UniFi: wrong site. Meraki: `network_ids` restricting scope |
 | Channel or utilisation blank | Generic SNMP, or the Meraki field-name caveat above |
 | Data goes stale | Check the poll interval and the last successful poll time |
+| Error "returned no access points… were kept" | The controller answered three times with an empty list while access points are on record, so nothing was deleted. Check the controller; if it really has none, remove the collector |
+| Error "did not answer within 180 seconds" | The controller accepted the connection and never replied |
+| Certificate verify failed | TLS verification is on and the controller has a self-signed or untrusted certificate. Trust the certificate, or turn off **Verify TLS certificate** on that controller |
 | A site or floor is wrong | Those come from the collector's own `hosts` config on Generic SNMP — they are labels you set, not discovered |
 
 ---

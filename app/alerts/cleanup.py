@@ -1,9 +1,9 @@
 """
-Alert event + RF-metrics history auto-cleanup.
+Alert event, client event + RF-metrics history auto-cleanup.
 
-Runs once per day. Deletes resolved alert_events and radio_metrics rows
-older than the configured retention windows (defaults: 90 days for alert
-events, 30 days for RF metric history).
+Runs once per day. Deletes resolved alert_events, client_events and
+radio_metrics rows older than the configured retention windows (defaults:
+90 days for alert events, 90 for client events, 30 for RF metric history).
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ class AlertCleanup:
 
 
 async def run_cleanup_now(db_path: str) -> dict:
-    """Delete resolved alert_events and radio_metrics rows past their retention
+    """Delete resolved alert_events, client_events and radio_metrics rows past their retention
     window. Shared by the scheduled loop and the manual "Run Cleanup Now" button."""
     async with aiosqlite.connect(db_path) as db:
         async def _setting(key: str, default: int) -> int:
@@ -67,6 +67,7 @@ async def run_cleanup_now(db_path: str) -> dict:
 
         alert_retention_days = await _setting("alert_event_retention_days", 90)
         metrics_retention_days = await _setting("radio_metrics_retention_days", 30)
+        client_event_retention_days = await _setting("client_event_retention_days", 90)
 
         result = await db.execute(
             "DELETE FROM alert_events WHERE resolved = 1 AND created_at < datetime('now', ?)",
@@ -80,16 +81,25 @@ async def run_cleanup_now(db_path: str) -> dict:
         )
         metrics_deleted = result.rowcount
 
+        result = await db.execute(
+            "DELETE FROM client_events WHERE ts < datetime('now', ?)",
+            (f"-{client_event_retention_days} days",),
+        )
+        client_events_deleted = result.rowcount
+
         await db.commit()
 
-    if alerts_deleted or metrics_deleted:
+    if alerts_deleted or metrics_deleted or client_events_deleted:
         log.info(
             f"Cleanup: removed {alerts_deleted} resolved alerts (>{alert_retention_days}d), "
-            f"{metrics_deleted} radio_metrics rows (>{metrics_retention_days}d)"
+            f"{metrics_deleted} radio_metrics rows (>{metrics_retention_days}d), "
+            f"{client_events_deleted} client events (>{client_event_retention_days}d)"
         )
     return {
         "alerts_deleted": alerts_deleted,
         "metrics_deleted": metrics_deleted,
+        "client_events_deleted": client_events_deleted,
         "alert_retention_days": alert_retention_days,
         "metrics_retention_days": metrics_retention_days,
+        "client_event_retention_days": client_event_retention_days,
     }

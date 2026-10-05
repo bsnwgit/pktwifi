@@ -44,7 +44,7 @@ Config shape:
   "api_key": "...",                       # api_key mode
   "site": "default",
   "udm": false,          # userpass mode only — true if this is a UDM/UDM-Pro/Cloud Key Gen2+ console
-  "verify_tls": false    # most on-prem controllers use a self-signed cert
+  "verify_tls": true     # default; set false for a controller with a self-signed cert
 }
 """
 from __future__ import annotations
@@ -175,7 +175,7 @@ class UnifiCollector(Collector):
         self.api_key = config.get("api_key", "")
         self.site = config.get("site", "default")
         self.udm = bool(config.get("udm", False))
-        self.verify_tls = bool(config.get("verify_tls", False))
+        self.verify_tls = bool(config.get("verify_tls", True))
 
     def _api_prefix(self) -> str:
         return f"{self.base}/proxy/network/api" if self.udm else f"{self.base}/api"

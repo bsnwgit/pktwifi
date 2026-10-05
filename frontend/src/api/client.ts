@@ -148,6 +148,7 @@ export const api = {
   updateUser: (id: number, body: Partial<UserIn> & { is_active?: boolean }) =>
     request<User>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteUser: (id: number) => request(`/users/${id}`, { method: 'DELETE' }),
+  unlockUser: (id: number) => request(`/users/${id}/unlock`, { method: 'POST' }),
   setDefaultAdmin: (id: number) => request(`/users/${id}/set-default-admin`, { method: 'PATCH' }),
   resetUserPassword: (id: number, newPassword: string) =>
     request(`/users/${id}/reset-password`, { method: 'PATCH', body: JSON.stringify({ new_password: newPassword }) }),
@@ -303,7 +304,7 @@ export const api = {
     return { blob, filename }
   },
   runCleanup: () =>
-    request<{ alerts_deleted: number; metrics_deleted: number; alert_retention_days: number; metrics_retention_days: number }>(
+    request<{ alerts_deleted: number; metrics_deleted: number; client_events_deleted: number; alert_retention_days: number; metrics_retention_days: number; client_event_retention_days: number }>(
       '/system/cleanup', { method: 'POST' }
     ),
   restartService: () => request<{ status: string; message: string }>('/system/restart', { method: 'POST' }),
@@ -444,6 +445,9 @@ export interface User {
   created_at: string
   last_login: string | null
   has_password: boolean
+  is_locked: boolean
+  lock_permanent: boolean
+  locked_until: string | null
 }
 
 export interface DevicesSummary {

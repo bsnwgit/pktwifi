@@ -1277,6 +1277,13 @@ function UsersTab() {
     } catch (e: any) { setError(e.message) }
   }
 
+  const unlock = async (u: User) => {
+    try {
+      await api.unlockUser(u.id)
+      load()
+    } catch (e: any) { setError(e.message) }
+  }
+
   const makeDefaultAdmin = async (u: User) => {
     try {
       await api.setDefaultAdmin(u.id)
@@ -1292,6 +1299,7 @@ function UsersTab() {
           <p>Three roles: <span className="text-gray-300 font-medium">admin</span> (full access, including this Users tab, Collectors, and Integrations), <span className="text-gray-300 font-medium">analyst</span> (can edit access points, ack/resolve alerts), and <span className="text-gray-300 font-medium">viewer</span> (read-only).</p>
           <p>This tab only manages <span className="text-gray-300 font-medium">local accounts</span> — SAML SSO users are auto-provisioned on first login.</p>
           <p><span className="text-gray-300 font-medium">Deactivate</span> blocks login immediately without deleting the account or its history — prefer it over Delete for someone who's just leaving temporarily, since Delete is permanent.</p>
+          <p>After repeated failed logins an account is <span className="text-gray-300 font-medium">locked</span> for 30 minutes; if it then fails the same number of times again, it stays locked until you click the unlock icon here. The number of failures allowed, and how long a failure counts, are set on the Auth tab. If the only admin is locked, run <span className="text-gray-300 font-medium">scripts/unlock_user.py</span> on the server.</p>
           <p>The <span className="text-yellow-400">★</span> marks the <span className="text-gray-300 font-medium">default admin</span> — when every auth method in the Auth tab is disabled, the app skips the login page entirely and signs everyone in as this account. Click the star on any active admin to reassign it.</p>
         </HelpButton>
       </div>
@@ -1403,6 +1411,12 @@ function UsersTab() {
                     <span className={`px-2 py-0.5 rounded text-xs font-medium ${badge(u.is_active)}`}>
                       {u.is_active ? 'Active' : 'Disabled'}
                     </span>
+                    {u.is_locked && (
+                      <span className="ml-2 px-2 py-0.5 rounded text-xs font-medium bg-red-900/40 text-red-400 border border-red-700/40"
+                        title={u.lock_permanent ? 'Locked until an admin unlocks it' : `Locked until ${u.locked_until} UTC`}>
+                        {u.lock_permanent ? 'Locked' : 'Locked 30 min'}
+                      </span>
+                    )}
                   </td>
                   <td className="px-5 py-3.5 text-white text-xs">
                     {u.last_login
@@ -1411,6 +1425,14 @@ function UsersTab() {
                   </td>
                   <td className="px-5 py-3.5">
                     <div className="flex items-center justify-end gap-1">
+                      {u.is_locked && (
+                        <button onClick={() => unlock(u)} title="Unlock account"
+                          className="p-1.5 text-red-400 hover:text-green-400 hover:bg-green-900/20 rounded transition-colors">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 119 0v3.75M3.75 21.75h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H3.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/>
+                          </svg>
+                        </button>
+                      )}
                       <button onClick={() => setResetPw(u)} title="Reset Password"
                         className="p-1.5 text-white hover:text-purple-400 hover:bg-purple-900/20 rounded transition-colors">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
@@ -1558,8 +1580,8 @@ function ControllerModal({ controller, types, sites, credentials, onClose, onSav
     switch (collectorType) {
       case 'unifi':
         return config.auth_method === 'api_key'
-          ? { vendor: 'unifi', target_url: (config.controller_url as string) ?? '', verify_tls: !!config.verify_tls }
-          : { target_url: (config.controller_url as string) ?? '', udm: !!config.udm, verify_tls: !!config.verify_tls }
+          ? { vendor: 'unifi', target_url: (config.controller_url as string) ?? '', verify_tls: config.verify_tls !== false }
+          : { target_url: (config.controller_url as string) ?? '', udm: !!config.udm, verify_tls: config.verify_tls !== false }
       case 'cisco_meraki':
         return { vendor: 'meraki' }
       case 'snmp_generic': {
@@ -2486,11 +2508,11 @@ export default function Settings() {
     }
   }
   const authSave = useSave([
-    'auth_local_enabled', 'session_timeout_minutes',
+    'auth_local_enabled', 'session_timeout_minutes', 'login_max_failed_attempts', 'login_failure_window_hours',
     'okta_saml_enabled', 'okta_saml_idp_entity_id', 'okta_saml_idp_sso_url',
     'okta_saml_idp_cert', 'okta_saml_sp_entity_id', 'okta_saml_sp_cert', 'okta_saml_sp_key',
   ], settings, load)
-  const storageSave = useSave(['alert_event_retention_days', 'radio_metrics_retention_days'], settings, load)
+  const storageSave = useSave(['alert_event_retention_days', 'radio_metrics_retention_days', 'client_event_retention_days'], settings, load)
   const logForwardSave = useSave([
     'log_forward_enabled', 'log_forward_host', 'log_forward_port',
     'log_forward_protocol', 'log_forward_level', 'log_forward_app_name',
@@ -2607,6 +2629,7 @@ export default function Settings() {
       const parts: string[] = []
       parts.push(r.alerts_deleted > 0 ? `${r.alerts_deleted} resolved alert(s) removed` : 'No alerts beyond retention threshold')
       parts.push(r.metrics_deleted > 0 ? `${r.metrics_deleted} RF metric row(s) removed` : 'No RF metrics beyond retention threshold')
+      parts.push(r.client_events_deleted > 0 ? `${r.client_events_deleted} client event(s) removed` : 'No client events beyond retention threshold')
       setCleanupResult(parts.join(' · '))
     } catch (e: any) {
       setCleanupResult(`Error: ${e.message}`)
@@ -2742,6 +2765,18 @@ export default function Settings() {
                     <span className="text-sm text-white">minutes</span>
                   </div>
                 </Field>
+                <Field label="Failed logins before lockout" hint="Consecutive failures that lock an account: 30 minutes the first time, until an admin unlocks it the second time. Applies to local accounts">
+                  <div className="flex items-center gap-3">
+                    <NumberInput value={num('login_max_failed_attempts', 3)} onChange={v => set('login_max_failed_attempts', v)} min={1} max={100} />
+                    <span className="text-sm text-white">attempts</span>
+                  </div>
+                </Field>
+                <Field label="Failed login window" hint="Failures older than this stop counting toward a lockout">
+                  <div className="flex items-center gap-3">
+                    <NumberInput value={num('login_failure_window_hours', 24)} onChange={v => set('login_failure_window_hours', v)} min={1} max={8760} />
+                    <span className="text-sm text-white">hours</span>
+                  </div>
+                </Field>
 
                 <div className="pt-4 pb-2">
                   <p className="text-xs font-semibold text-white uppercase tracking-wider">SAML 2.0 SSO</p>
@@ -2851,7 +2886,7 @@ export default function Settings() {
             title: 'Storage — How It Works',
             content: <>
               <p>pktWiFi stores everything in <span className="text-gray-300 font-medium">SQLite</span> — there's no separate analytical backend to choose here, unlike some sibling apps.</p>
-              <p>Retention windows control how long resolved alerts and raw RF metric history stick around before a background job deletes them. <span className="text-gray-300 font-medium">Manual cleanup</span> applies the current thresholds immediately instead of waiting for the next scheduled pass (once daily).</p>
+              <p>Retention windows control how long resolved alerts, client events and raw RF metric history stick around before a background job deletes them. <span className="text-gray-300 font-medium">Manual cleanup</span> applies the current thresholds immediately instead of waiting for the next scheduled pass (once daily).</p>
             </>,
           }}
         >
@@ -2864,6 +2899,12 @@ export default function Settings() {
           <Field label="RF metrics retention" hint="Days to keep raw radio/RF metric history">
             <div className="flex items-center gap-3">
               <NumberInput value={num('radio_metrics_retention_days', 30)} onChange={v => set('radio_metrics_retention_days', v)} min={1} max={3650} />
+              <span className="text-sm text-white">days</span>
+            </div>
+          </Field>
+          <Field label="Client event retention" hint="Days to keep client associate, roam and auth-failure events">
+            <div className="flex items-center gap-3">
+              <NumberInput value={num('client_event_retention_days', 90)} onChange={v => set('client_event_retention_days', v)} min={1} max={3650} />
               <span className="text-sm text-white">days</span>
             </div>
           </Field>

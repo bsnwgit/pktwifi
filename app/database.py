@@ -61,6 +61,7 @@ async def init_db() -> None:
 
         await _encrypt_legacy_api_keys(conn)
         await _encrypt_legacy_suite_tokens(conn)
+        await _pin_legacy_collector_tls(conn)
 
 
 async def _encrypt_legacy_suite_tokens(conn: aiosqlite.Connection) -> None:
@@ -92,6 +93,40 @@ async def _encrypt_legacy_suite_tokens(conn: aiosqlite.Connection) -> None:
         await conn.execute(
             "UPDATE integrations SET suite_token = ? WHERE id = ?",
             (encrypt_str(suite_token), row_id),
+        )
+
+    await conn.execute("INSERT INTO _migrations (filename) VALUES (?)", (marker,))
+    await conn.commit()
+
+
+async def _pin_legacy_collector_tls(conn: aiosqlite.Connection) -> None:
+    """One-time data migration: collectors verify TLS by default now, but every
+    UniFi collector saved before that never said either way and was running
+    unverified. Write verify_tls=false into those so they keep working; new
+    collectors get the verifying default. collectors.config_json is an
+    encrypted blob, so this cannot be a .sql migration. Tracked via _migrations
+    like the other data migrations here."""
+    marker = "999_pin_legacy_collector_tls.py"
+    async with conn.execute(
+        "SELECT 1 FROM _migrations WHERE filename = ?", (marker,)
+    ) as cur:
+        if await cur.fetchone():
+            return
+
+    from app.wifi.collectors.crypto import decrypt_config, encrypt_config
+
+    async with conn.execute("SELECT id, config_json FROM collectors WHERE collector_type = 'unifi'") as cur:
+        rows = await cur.fetchall()
+
+    for row_id, blob in rows:
+        config = decrypt_config(blob)
+        # {} is also what an undecryptable blob returns — never overwrite one.
+        if not config or "verify_tls" in config:
+            continue
+        config["verify_tls"] = False
+        await conn.execute(
+            "UPDATE collectors SET config_json = ? WHERE id = ?",
+            (encrypt_config(config), row_id),
         )
 
     await conn.execute("INSERT INTO _migrations (filename) VALUES (?)", (marker,))

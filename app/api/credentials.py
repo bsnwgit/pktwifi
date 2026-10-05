@@ -133,7 +133,7 @@ class CredentialTestRequest(BaseModel):
     target_url: str | None = None   # userpass / api_key+unifi: controller URL
     vendor: str | None = None       # api_key: 'unifi' | 'meraki'
     udm: bool = False               # userpass: UniFi OS console (UDM/Cloud Gateway)
-    verify_tls: bool = False
+    verify_tls: bool = True
     host: str | None = None         # snmp_v2c/v3: device IP
     port: int = 161
 
