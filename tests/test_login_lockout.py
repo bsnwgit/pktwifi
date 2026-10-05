@@ -97,6 +97,10 @@ def main() -> int:
         def fail(user: str, n: int) -> list[int]:
             return [login(user, BAD).status_code for _ in range(n)]
 
+        # Every attempt below comes from one address; this test is about the account
+        # lockout, so keep the per-address limit (tests/test_address_throttle.py) out of its way.
+        sql("INSERT INTO settings (key, value) VALUES ('address_max_failed_attempts', '10000')")
+
         print("── first lockout ──")
         make_user("bob")
         codes = fail("bob", 3)

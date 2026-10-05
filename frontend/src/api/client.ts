@@ -312,7 +312,7 @@ export const api = {
     return { blob, filename }
   },
   runCleanup: () =>
-    request<{ alerts_deleted: number; metrics_deleted: number; client_events_deleted: number; alert_retention_days: number; metrics_retention_days: number; client_event_retention_days: number }>(
+    request<{ alerts_deleted: number; metrics_deleted: number; client_events_deleted: number; stale_radios_deleted: number; alert_retention_days: number; metrics_retention_days: number; client_event_retention_days: number; stale_radio_retention_days: number }>(
       '/system/cleanup', { method: 'POST' }
     ),
   restartService: () => request<{ status: string; message: string }>('/system/restart', { method: 'POST' }),

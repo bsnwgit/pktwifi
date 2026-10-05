@@ -15,7 +15,8 @@ The properties worth proving:
   * error text that is stored or returned never carries a URL's credentials or
     query string, but keeps the host and path an admin needs,
   * a server error on the suite endpoints and the widgets does not hand the
-    caller the database's own message.
+    caller the database's own message,
+  * the Resonance spec lists its schemas in the same order in every process.
 """
 from __future__ import annotations
 
@@ -213,6 +214,18 @@ def main() -> int:
             check("and says nothing of the cause", "settings" not in resp.text and "no such" not in resp.text, resp.text)
         finally:
             sql("ALTER TABLE settings_off RENAME TO settings")
+
+    print("\n── the spec document is stable ──")
+    import subprocess
+    probe = ("import json; from app.main import app; from app.api.resonance_data.documents import build_spec; "
+             "print(json.dumps(list(build_spec(app, allow_writes=False)['components']['schemas'])))")
+    orders = set()
+    for seed in ("1", "2", "3"):
+        # A different hash seed is what used to reorder a set between processes.
+        out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=str(REPO_ROOT),
+                             env={**os.environ, "PYTHONHASHSEED": seed})
+        orders.add(out.stdout.strip().splitlines()[-1] if out.stdout.strip() else out.stderr[-200:])
+    check("the same schema order comes out under three different hash seeds", len(orders) == 1, str(orders)[:200])
 
     print()
     if FAILURES:

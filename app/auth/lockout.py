@@ -56,7 +56,7 @@ def locked_exception(state: dict) -> HTTPException:
     return HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail)
 
 
-async def _int_setting(db: aiosqlite.Connection, key: str, default: int, ceiling: int) -> int:
+async def int_setting(db: aiosqlite.Connection, key: str, default: int, ceiling: int) -> int:
     async with db.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cur:
         row = await cur.fetchone()
     if not row:
@@ -69,7 +69,7 @@ async def _int_setting(db: aiosqlite.Connection, key: str, default: int, ceiling
 
 
 async def max_attempts(db: aiosqlite.Connection) -> int:
-    return await _int_setting(db, "login_max_failed_attempts", DEFAULT_MAX_ATTEMPTS, _MAX_ATTEMPTS_CEILING)
+    return await int_setting(db, "login_max_failed_attempts", DEFAULT_MAX_ATTEMPTS, _MAX_ATTEMPTS_CEILING)
 
 
 async def record_failure(db: aiosqlite.Connection, user_id: int) -> dict:
