@@ -27,8 +27,7 @@ def main() -> int:
     conn = sqlite3.connect(get_settings().db_path)
     try:
         cur = conn.execute(
-            "UPDATE users SET failed_login_count = 0, lockout_count = 0, locked_until = NULL, is_locked = 0, "
-            "last_failed_login = NULL "
+            "UPDATE users SET failed_login_count = 0, lockout_count = 0, locked_until = NULL, is_locked = 0 "
             "WHERE username = ? OR email = ?",
             (who, who),
         )

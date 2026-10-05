@@ -496,8 +496,7 @@ own left-hand sub-tab strip:
   until an admin unlocks it (unlock icon; `scripts/unlock_user.py` from the
   host if the only admin is locked).
 - **Auth** — toggle local username/password auth, set the session timeout
-  how many failed logins lock an account (default 3) and the window they
-  count within (default 24 hours),
+  and how many failed logins lock an account (default 3),
   and configure SAML 2.0 SSO (paste IdP metadata XML to auto-fill Entity
   ID/SSO URL/certificate, or fill them in by hand; the ACS URL and SP
   metadata link are derived from **Base URL** on the General tab, so set

@@ -27,7 +27,7 @@ Prompts for install directory and port, then handles the venv, `config.yaml` + s
 
 All roles can view every page; analysts and admins can acknowledge/resolve alerts; only admins reach Settings. Manage accounts at Settings → Security → Users — create/edit/deactivate/delete, reset password, and mark one active admin as the **default admin** (star icon): if every auth method is ever disabled, the app auto-signs everyone in as that account instead of dead-ending.
 
-**Failed-login lockout.** A local account is locked for 30 minutes after a set number of failed logins (Settings → Security → Auth → *Failed logins before lockout*, default 3) inside a time window (*Failed login window*, default 24 hours — older failures stop counting). If it then fails that many times again it stays locked until an admin clicks the unlock icon beside it on the Users tab. While locked, even the right password is refused. A successful login clears the failure count and any earlier lockout. If the only admin is locked, unlock it from the server, in the install directory with the app's own Python:
+**Failed-login lockout.** A local account is locked for 30 minutes after a set number of failed logins in a row (Settings → Security → Auth → *Failed logins before lockout*, default 3). Failures never expire; only a successful login resets the count. If it then fails that many times again it stays locked until an admin clicks the unlock icon beside it on the Users tab. While locked, even the right password is refused. A successful login clears the failure count and any earlier lockout. If the only admin is locked, unlock it from the server, in the install directory with the app's own Python:
 
 ```bash
 python3 scripts/unlock_user.py <username>
