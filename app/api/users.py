@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import aiosqlite
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from app.database import get_db
 from app.dependencies import CurrentUser, AdminUser
-from app.auth import lockout
+from app.auth import lockout, throttle
 from app.auth.local import hash_password, verify_password
 
 router = APIRouter()
@@ -179,9 +179,14 @@ async def delete_user(user_id: int, user: AdminUser, db: aiosqlite.Connection = 
 
 
 @router.post("/me/change-password")
-async def change_my_password(body: ChangePasswordRequest, user: CurrentUser, db: aiosqlite.Connection = Depends(get_db)):
+async def change_my_password(body: ChangePasswordRequest, request: Request, user: CurrentUser,
+                             db: aiosqlite.Connection = Depends(get_db)):
     if user.get("_via_suite"):
         raise HTTPException(status_code=400, detail="Password managed by pktHub for suite-authenticated sessions")
+    address = throttle.client_address(request)
+    remaining = await throttle.blocked_seconds(db, address)
+    if remaining:
+        raise throttle.blocked_exception(remaining)
     async with db.execute(
         f"SELECT hashed_password, {lockout.LOCK_COLUMNS} FROM users WHERE id = ?", (user["id"],)
     ) as cur:
@@ -196,6 +201,9 @@ async def change_my_password(body: ChangePasswordRequest, user: CurrentUser, db:
     if not row or not row["hashed_password"] or not verify_password(body.current_password, row["hashed_password"]):
         if row:
             state = await lockout.record_failure(db, user["id"])
+            remaining = await throttle.record_failure(db, address)
+            if remaining:
+                raise throttle.blocked_exception(remaining)
             if state["locked"]:
                 raise lockout.locked_exception(state)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")

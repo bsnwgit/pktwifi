@@ -33,6 +33,10 @@ All roles can view every page; analysts and admins can acknowledge/resolve alert
 python3 scripts/unlock_user.py <username>
 ```
 
+**Per-address throttle.** Separately from the account lockout, an address that keeps failing to sign in is blocked. Failed credential checks are counted by the address they came from, whatever username was tried, at the sign-in form and at the change-password form: after *Failed sign-ins per address* (default 10) within *Counted over* (default 15 minutes), that address is refused for *Address blocked for* (default 15 minutes), even with correct credentials. All three are under Settings → Security → Auth. A successful sign-in does not reset the count, and failures stop counting when the window ends. Other addresses are unaffected, and the block ends by itself.
+
+The address is the one the connection came from. If pktWiFi sits behind a proxy on another host (pktHub, for example), every user arrives from the proxy's address and shares one count, so one person guessing could block everyone behind it. In that setup raise the limit well above normal use, or throttle at the proxy. pktWiFi does not read `X-Forwarded-For`, because any client can send it.
+
 
 ### Okta SAML SSO
 
@@ -90,7 +94,9 @@ A notification is sent when an alert *opens*, not on every 30-second evaluation 
 
 ## Storage & retention
 
-pktWiFi is SQLite-only — there's no analytical-backend picker like pktsnmp/pktflow's ClickHouse/DuckDB option. Data → Storage instead configures **retention**: days to keep resolved alert events, client events (associate, roam, auth failures; default 90) and raw RF metric history, plus a **Run Cleanup Now** button to apply the current thresholds immediately instead of waiting for the daily scheduled pass. If RF metric volume ever grows large enough to need it, a ClickHouse/DuckDB backend abstraction would need to be built following the pattern already established in pktsnmp — not present in this app today.
+pktWiFi is SQLite-only — there's no analytical-backend picker like pktsnmp/pktflow's ClickHouse/DuckDB option. Data → Storage instead configures **retention**: days to keep resolved alert events, client events (associate, roam, auth failures; default 90), raw RF metric history (default 30) and **stale radios** (default 30), plus a **Run Cleanup Now** button to apply the current thresholds immediately instead of waiting for the daily scheduled pass. A stale radio is one that no poll has reported for the set time: a band a controller stopped reporting, or an access point that no longer reports at all. Its remaining metric history is removed with it, and a client that pointed at it keeps its row. If the controller reports it again, the radio is simply re-created. A retention of zero or less is not honoured on any of these settings; the default applies instead.
+
+If RF metric volume ever grows large enough to need it, a ClickHouse/DuckDB backend abstraction would need to be built following the pattern already established in pktsnmp — not present in this app today.
 
 ## Backup & Restore
 

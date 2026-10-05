@@ -193,10 +193,11 @@ export default function Settings() {
   }
   const authSave = useSave([
     'auth_local_enabled', 'session_timeout_minutes', 'login_max_failed_attempts',
+    'address_max_failed_attempts', 'address_failure_window_minutes', 'address_block_minutes',
     'okta_saml_enabled', 'okta_saml_idp_entity_id', 'okta_saml_idp_sso_url',
     'okta_saml_idp_cert', 'okta_saml_sp_entity_id', 'okta_saml_sp_cert', 'okta_saml_sp_key',
   ], settings, load)
-  const storageSave = useSave(['alert_event_retention_days', 'radio_metrics_retention_days', 'client_event_retention_days'], settings, load)
+  const storageSave = useSave(['alert_event_retention_days', 'radio_metrics_retention_days', 'client_event_retention_days', 'stale_radio_retention_days'], settings, load)
   const logForwardSave = useSave([
     'log_forward_enabled', 'log_forward_host', 'log_forward_port',
     'log_forward_protocol', 'log_forward_level', 'log_forward_app_name',
@@ -314,6 +315,7 @@ export default function Settings() {
       parts.push(r.alerts_deleted > 0 ? `${r.alerts_deleted} resolved alert(s) removed` : 'No alerts beyond retention threshold')
       parts.push(r.metrics_deleted > 0 ? `${r.metrics_deleted} RF metric row(s) removed` : 'No RF metrics beyond retention threshold')
       parts.push(r.client_events_deleted > 0 ? `${r.client_events_deleted} client event(s) removed` : 'No client events beyond retention threshold')
+      parts.push(r.stale_radios_deleted > 0 ? `${r.stale_radios_deleted} unreported radio(s) removed` : 'No unreported radios beyond retention threshold')
       setCleanupResult(parts.join(' · '))
     } catch (e: any) {
       setCleanupResult(`Error: ${e.message}`)
@@ -455,6 +457,24 @@ export default function Settings() {
                     <span className="text-sm text-white">attempts</span>
                   </div>
                 </Field>
+                <Field label="Failed sign-ins per address" hint="Failed sign-ins from one address, whatever username was tried, before that address is blocked. Behind a proxy on another host every user shares the proxy's address, so raise this there">
+                  <div className="flex items-center gap-3">
+                    <NumberInput value={num('address_max_failed_attempts', 10)} onChange={v => set('address_max_failed_attempts', v)} min={1} max={10000} />
+                    <span className="text-sm text-white">attempts</span>
+                  </div>
+                </Field>
+                <Field label="Counted over" hint="How long a failed sign-in counts toward the address limit. A successful sign-in does not reset it">
+                  <div className="flex items-center gap-3">
+                    <NumberInput value={num('address_failure_window_minutes', 15)} onChange={v => set('address_failure_window_minutes', v)} min={1} max={1440} />
+                    <span className="text-sm text-white">minutes</span>
+                  </div>
+                </Field>
+                <Field label="Address blocked for" hint="How long an address that reached the limit is refused, even with correct credentials">
+                  <div className="flex items-center gap-3">
+                    <NumberInput value={num('address_block_minutes', 15)} onChange={v => set('address_block_minutes', v)} min={1} max={1440} />
+                    <span className="text-sm text-white">minutes</span>
+                  </div>
+                </Field>
 
                 <div className="pt-4 pb-2">
                   <p className="text-xs font-semibold text-white uppercase tracking-wider">SAML 2.0 SSO</p>
@@ -564,7 +584,7 @@ export default function Settings() {
             title: 'Storage — How It Works',
             content: <>
               <p>pktWiFi stores everything in <span className="text-gray-300 font-medium">SQLite</span> — there's no separate analytical backend to choose here, unlike some sibling apps.</p>
-              <p>Retention windows control how long resolved alerts, client events and raw RF metric history stick around before a background job deletes them. <span className="text-gray-300 font-medium">Manual cleanup</span> applies the current thresholds immediately instead of waiting for the next scheduled pass (once daily).</p>
+              <p>Retention windows control how long resolved alerts, client events and raw RF metric history stick around, and how long a radio the controller no longer reports is kept before a background job deletes them. <span className="text-gray-300 font-medium">Manual cleanup</span> applies the current thresholds immediately instead of waiting for the next scheduled pass (once daily).</p>
             </>,
           }}
         >
@@ -583,6 +603,12 @@ export default function Settings() {
           <Field label="Client event retention" hint="Days to keep client associate, roam and auth-failure events">
             <div className="flex items-center gap-3">
               <NumberInput value={num('client_event_retention_days', 90)} onChange={v => set('client_event_retention_days', v)} min={1} max={3650} />
+              <span className="text-sm text-white">days</span>
+            </div>
+          </Field>
+          <Field label="Stale radio retention" hint="Days a radio can go unreported by its controller before it is removed, together with its remaining metric history. Radios are re-created if the controller reports them again">
+            <div className="flex items-center gap-3">
+              <NumberInput value={num('stale_radio_retention_days', 30)} onChange={v => set('stale_radio_retention_days', v)} min={1} max={3650} />
               <span className="text-sm text-white">days</span>
             </div>
           </Field>

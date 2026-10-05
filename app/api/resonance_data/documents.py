@@ -162,6 +162,9 @@ def build_spec(app, allow_writes: bool) -> dict:
         nested: set[str] = set()
         _referenced_schemas(all_schemas[name], nested)
         wanted |= nested - resolved.keys()
+    # Popping from a set visits schemas in a different order each process, which
+    # would make the same document differ from one run to the next.
+    resolved = dict(sorted(resolved.items()))
 
     spec: dict[str, Any] = {
         "openapi": full.get("openapi", "3.1.0"),
