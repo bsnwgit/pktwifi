@@ -15,6 +15,9 @@ The properties worth proving:
     never turns the next one permanent,
   * an admin can unlock a user, and so can the host-side script,
   * the limit is a setting, with 3 as the default when it is missing or junk,
+  * a wrong current password when changing a password counts as a failed
+    login and locks the account the same way, so a signed-in session cannot be
+    used to guess it,
   * an unknown username is refused without anything being counted,
   * old client events are purged on their own retention window.
 """
@@ -162,6 +165,37 @@ def main() -> int:
         make_user("gina")
         sql("DELETE FROM settings WHERE key = 'login_max_failed_attempts'")
         check("so does no value at all", fail("gina", 3)[-1] == 423)
+
+        print("\n── changing a password counts too ──")
+        def headers_for(name: str, pw: str = GOOD) -> dict:
+            return {"Authorization": f"Bearer {login(name, pw).json()['access_token']}"}
+
+        def change(h: dict, current: str, new: str = "a-new-password"):
+            return client.post("/api/users/me/change-password",
+                               json={"current_password": current, "new_password": new}, headers=h)
+
+        make_user("nina")
+        nh = headers_for("nina")
+        codes = [change(nh, BAD).status_code for _ in range(3)]
+        check("wrong current passwords are refused, and the third locks", codes == [401, 401, 423], str(codes))
+        check("the right current password is then refused too", change(nh, GOOD).status_code == 423)
+        check("the same lock applies to signing in", login("nina", GOOD).status_code == 423)
+        check("a session already open keeps working", client.get("/api/users/me", headers=nh).status_code == 200)
+        lapse("nina")
+        codes = [change(nh, BAD).status_code for _ in range(3)]
+        check("a second round locks it permanently", codes[-1] == 423 and row("nina")["is_locked"] == 1, str(codes))
+        check("an admin unlock lifts it", client.post(f"/api/users/{row('nina')['id']}/unlock", headers=h).status_code == 204)
+        check("and the password can then be changed", change(nh, GOOD, "brand-new-password").status_code == 200)
+        check("the new password signs in", login("nina", "brand-new-password").status_code == 200)
+        check("counters are clear", row("nina")["failed_login_count"] == 0 and row("nina")["lockout_count"] == 0)
+
+        make_user("omar")
+        oh = headers_for("omar")
+        change(oh, BAD)
+        check("a failure is counted", row("omar")["failed_login_count"] == 1)
+        check("a successful change clears it", change(oh, GOOD).status_code == 200 and row("omar")["failed_login_count"] == 0)
+        check("sign-in is required", client.post("/api/users/me/change-password",
+                                                 json={"current_password": GOOD, "new_password": "x" * 8}).status_code == 401)
 
         print("\n── accounts that do not exist ──")
         before = sql("SELECT COUNT(*) AS n FROM users")[0]["n"]

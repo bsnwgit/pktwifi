@@ -10,6 +10,10 @@ the failure count and the record of earlier lockouts.
 
 While an account is locked the password is not checked at all, so a locked
 account cannot be guessed at.
+
+The count covers every place a password is checked against an account: the
+login, and the current password asked for when changing one, so a signed-in
+session cannot be used to guess it.
 """
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ import json
 import logging
 
 import aiosqlite
+from fastapi import HTTPException, status
 
 log = logging.getLogger("pktwifi.auth")
 
@@ -40,6 +45,15 @@ def describe(row) -> dict:
         "permanent": permanent,
         "until": row["locked_until"] if temporary else None,
     }
+
+
+def locked_exception(state: dict) -> HTTPException:
+    # 423 rather than 401, so a client can tell "locked" from "wrong password".
+    if state["permanent"]:
+        detail = "This account is locked after repeated failed logins. Contact an administrator to unlock it."
+    else:
+        detail = f"This account is locked after repeated failed logins. Try again after {state['until']} UTC."
+    return HTTPException(status_code=status.HTTP_423_LOCKED, detail=detail)
 
 
 async def _int_setting(db: aiosqlite.Connection, key: str, default: int, ceiling: int) -> int:
