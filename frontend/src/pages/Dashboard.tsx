@@ -19,7 +19,7 @@ import {
   axisProps, tooltipProps, gridProps, glow, INSTRUMENT,
   InstrumentFrame, RadialRing, FlowDefs, NodeRail, LinePulseGradient, liveEdgeDot,
 } from '../components/instrument'
-import { ALARM, SIGNAL_COLOR, bandColor, bandLabel, bandRank, signalClass } from '../utils/rf'
+import { ALARM, SIGNAL_COLOR, SignalClass, bandColor, bandLabel, bandRank, signalClass } from '../utils/rf'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -173,13 +173,13 @@ function Readout({ label, value, unit, sub, tone = 'ink', gauge, onClick }: {
   value: ReactNode
   unit?: string
   sub?: ReactNode
-  tone?: 'ink' | 'gold' | 'ice' | 'alarm'
+  tone?: 'ink' | 'gold' | 'ice' | 'alarm' | 'good' | 'fair'
   gauge?: number
   onClick?: () => void
 }) {
   const R = 19
   const C = 2 * Math.PI * R
-  const toneClass = { ink: 'text-white', gold: 'f-num-gold', ice: 'f-num-ice', alarm: 'f-num-alarm' }[tone]
+  const toneClass = { ink: 'text-white', gold: 'f-num-gold', ice: 'f-num-ice', alarm: 'f-num-alarm', good: 'f-num-good', fair: 'f-num-fair' }[tone]
   return (
     <div
       className={`f-tick relative bg-gray-950 px-4 py-3.5 min-h-[104px] flex flex-col min-w-0 transition-colors ${
@@ -515,7 +515,7 @@ function ClientMix({ clients, generations }: {
 
 // ── Signal quality ─────────────────────────────────────────────────────────────
 
-function SignalQuality({ signal }: { signal: DashboardData['signal'] }) {
+function SignalQuality({ signal, onOpen }: { signal: DashboardData['signal']; onOpen: (c: SignalClass) => void }) {
   const [ref, W] = useWidth(360)
   const H = 128, PAD_T = 14, PAD_B = 18
   const bins = signal.histogram
@@ -541,11 +541,12 @@ function SignalQuality({ signal }: { signal: DashboardData['signal'] }) {
             {/* Weakest first, so the ledger reads in the same direction as the bars. */}
             <div className="flex items-center gap-3">
               {(['poor', 'fair', 'good'] as const).map(c => (
-                <span key={c} className="flex items-center gap-1.5">
+                <button key={c} onClick={() => onOpen(c)} title={`Show ${c} signal clients`}
+                        className="flex items-center gap-1.5 hover:opacity-80">
                   <span className="w-1.5 h-1.5 rounded-full" style={{ background: SIGNAL_COLOR[c], boxShadow: `0 0 6px ${SIGNAL_COLOR[c]}` }} />
                   <span className="font-mono text-[11px] text-white">{signal[c]}</span>
                   <span className="f-lbl">{c}</span>
-                </span>
+                </button>
               ))}
             </div>
           </div>
@@ -556,10 +557,11 @@ function SignalQuality({ signal }: { signal: DashboardData['signal'] }) {
                 const h = (b.clients / peak) * plotH
                 const c = SIGNAL_COLOR[signalClass(b.dbm, signal.good_dbm, signal.fair_dbm)]
                 return (
-                  <g key={b.dbm}>
+                  <g key={b.dbm} onClick={b.clients ? () => onOpen(signalClass(b.dbm, signal.good_dbm, signal.fair_dbm)) : undefined}
+                     style={b.clients ? { cursor: 'pointer' } : undefined}>
                     <rect x={xAt(b.dbm) + 2} y={PAD_T + plotH - h} width={Math.max(1, bw - 4)} height={h}
                           fill={c} fillOpacity={0.72} style={b.clients ? glow(c, 4) : undefined}>
-                      <title>{`${b.dbm} to ${b.dbm + 5} dBm: ${b.clients} client${b.clients === 1 ? '' : 's'}`}</title>
+                      <title>{`${b.dbm} to ${b.dbm + 5} dBm: ${b.clients} client${b.clients === 1 ? '' : 's'}${b.clients ? ' — click to list' : ''}`}</title>
                     </rect>
                     {b.clients > 0 && (
                       <text x={xAt(b.dbm) + bw / 2} y={PAD_T + plotH - h - 3} textAnchor="middle"
@@ -742,17 +744,36 @@ function Estate({ data }: { data: DashboardData }) {
   const sig = data.signal
   const goodShare = sig.measured ? Math.round((sig.good / sig.measured) * 100) : 0
   const alerts = data.alerts
+  // Share-based service level: 75%+ green, 50-75% amber, under 50% red.
+  const shareTone = (share: number) => share >= 0.75 ? 'good' : share >= 0.5 ? 'fair' : 'alarm'
+  const apTone = ap.total ? shareTone(ap.online / ap.total) : 'ink'
+  const clientTone = sig.measured ? shareTone(sig.good / sig.measured) : 'ice'
   const openMetrics = (id: number) => navigate(`/metrics?ap=${id}`)
 
   return (
     <>
-      <div className="grid grid-cols-3 xl:grid-cols-6 gap-px border"
+      <div className="grid grid-cols-3 gap-px border"
            style={{ background: 'rgba(216,180,110,.08)', borderColor: 'rgba(216,180,110,.08)' }}>
         <Readout
           label="Access Points"
           value={ap.total.toLocaleString()}
+          tone={apTone}
           sub={<>{ap.online} online · {ap.offline} offline{ap.rogue > 0 && <span className="text-red-400"> · {ap.rogue} rogue</span>}</>}
           onClick={() => navigate('/access-points')}
+        />
+        <Readout
+          label="Clients"
+          value={data.clients.total.toLocaleString()}
+          tone={clientTone}
+          sub={data.clients.by_band.map(b => `${bandLabel(b.band)} ${b.clients}`).join(' · ') || 'none connected'}
+          onClick={() => navigate('/clients')}
+        />
+        <Readout
+          label="Active Alerts"
+          value={alerts.active}
+          tone={alerts.active ? 'alarm' : 'good'}
+          sub={alerts.active ? `${alerts.unacked} unacknowledged` : 'all clear'}
+          onClick={() => navigate('/alerts')}
         />
         <Readout
           label="Availability"
@@ -761,13 +782,6 @@ function Estate({ data }: { data: DashboardData }) {
           tone="gold"
           gauge={availability}
           sub={`${ap.online} of ${ap.total} online`}
-        />
-        <Readout
-          label="Clients"
-          value={data.clients.total.toLocaleString()}
-          tone="ice"
-          sub={data.clients.by_band.map(b => `${bandLabel(b.band)} ${b.clients}`).join(' · ') || 'none connected'}
-          onClick={() => navigate('/clients')}
         />
         <Readout
           label="Airtime · mean"
@@ -785,13 +799,6 @@ function Estate({ data }: { data: DashboardData }) {
           unit={sig.median_dbm != null ? 'dBm' : undefined}
           tone={sig.median_dbm != null && sig.median_dbm < sig.fair_dbm ? 'alarm' : 'ink'}
           sub={sig.measured ? `${goodShare}% good · ${sig.poor} poor` : 'no client reports RSSI'}
-        />
-        <Readout
-          label="Active Alerts"
-          value={alerts.active}
-          tone={alerts.active ? 'alarm' : 'ink'}
-          sub={alerts.active ? `${alerts.unacked} unacknowledged` : 'all clear'}
-          onClick={() => navigate('/alerts')}
         />
       </div>
 
@@ -838,7 +845,7 @@ function Estate({ data }: { data: DashboardData }) {
           <ClientMix clients={data.clients} generations={data.generations} />
         </Card>
         <Card title="Signal Quality" chip={<NowChip />}>
-          <SignalQuality signal={sig} />
+          <SignalQuality signal={sig} onOpen={c => navigate(`/clients?signal=${c}`)} />
         </Card>
       </div>
 

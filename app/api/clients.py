@@ -6,13 +6,18 @@ from __future__ import annotations
 import json
 
 import aiosqlite
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.database import get_db
 from app.dependencies import CurrentUser
 from app.wifi.freshness import client_is_current
+from app.wifi.rf import SIGNAL_FAIR_DBM, SIGNAL_GOOD_DBM, signal_class
 
 router = APIRouter()
+
+SignalFilter = Literal["good", "fair", "poor"]
 
 
 # wifi_clients stores which radio a client is attached to (radio_id) but not
@@ -41,6 +46,7 @@ def _client_out(row) -> dict:
         "channel_width_mhz": row["channel_width_mhz"],
         "protocol": row["protocol"],
         "rssi_dbm": row["rssi_dbm"],
+        "signal_class": signal_class(row["rssi_dbm"]) if row["rssi_dbm"] is not None else None,
         "snr_db": row["snr_db"],
         "tx_rate_mbps": row["tx_rate_mbps"],
         "rx_rate_mbps": row["rx_rate_mbps"],
@@ -49,7 +55,9 @@ def _client_out(row) -> dict:
     }
 
 
-def _list_filters(access_point_id: int | None, ssid: str | None, search: str | None) -> tuple[str, list]:
+def _list_filters(
+    access_point_id: int | None, ssid: str | None, search: str | None, signal: SignalFilter | None = None,
+) -> tuple[str, list]:
     # The list and its count show clients on air now, not every client the
     # poll engine ever stored (see app/wifi/freshness.py).
     where = f" WHERE {client_is_current('wc')}"
@@ -60,6 +68,16 @@ def _list_filters(access_point_id: int | None, ssid: str | None, search: str | N
     if ssid:
         where += " AND wc.ssid = ?"
         params.append(ssid)
+    # Same cut-offs as signal_class(), so a Dashboard click lands on the clients it counted.
+    if signal == "good":
+        where += " AND wc.rssi_dbm >= ?"
+        params.append(SIGNAL_GOOD_DBM)
+    elif signal == "fair":
+        where += " AND wc.rssi_dbm >= ? AND wc.rssi_dbm < ?"
+        params.extend([SIGNAL_FAIR_DBM, SIGNAL_GOOD_DBM])
+    elif signal == "poor":
+        where += " AND wc.rssi_dbm < ?"
+        params.append(SIGNAL_FAIR_DBM)
     if search:
         where += """ AND (
             wc.hostname LIKE ? OR wc.mac_address LIKE ? OR wc.ip_address LIKE ? OR wc.ssid LIKE ?
@@ -79,11 +97,12 @@ async def list_clients(
     access_point_id: int | None = None,
     ssid: str | None = None,
     search: str | None = None,
+    signal: SignalFilter | None = None,
     limit: int | None = None,
     offset: int = 0,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    where, params = _list_filters(access_point_id, ssid, search)
+    where, params = _list_filters(access_point_id, ssid, search, signal)
     query = _CLIENT_SELECT + where + " ORDER BY wc.last_seen DESC"
     if limit is not None:
         query += " LIMIT ? OFFSET ?"
@@ -99,9 +118,10 @@ async def count_clients(
     access_point_id: int | None = None,
     ssid: str | None = None,
     search: str | None = None,
+    signal: SignalFilter | None = None,
     db: aiosqlite.Connection = Depends(get_db),
 ):
-    where, params = _list_filters(access_point_id, ssid, search)
+    where, params = _list_filters(access_point_id, ssid, search, signal)
     query = "SELECT COUNT(*) AS total FROM wifi_clients wc JOIN access_points ap ON ap.id = wc.access_point_id LEFT JOIN radios r ON r.id = wc.radio_id" + where
     async with db.execute(query, params) as cur:
         row = await cur.fetchone()

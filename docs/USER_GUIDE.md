@@ -35,6 +35,8 @@ A searchable, paginated inventory of every AP across every configured controller
 
 A searchable, paginated list of connected wireless clients — SSID, band, channel, RSSI/SNR, tx/rx rate, real connect time, and which AP they're attached to.
 
+Signal is colour-coded the same way as the Dashboard's Signal Quality — green good (≥ −65 dBm), amber fair (≥ −75 dBm), red poor — with a bar down the left of each row. The good / fair / poor buttons above the table filter to one level. Clicking a bar or a level in the Dashboard's **Signal Quality** opens this page already filtered to that level.
+
 ## Metrics
 
 Pick an AP from the searchable list to see per-band channel-utilization, retry-rate, and client-count charts over a 1h/6h/24h/7d window.
