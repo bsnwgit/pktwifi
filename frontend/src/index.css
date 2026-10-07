@@ -184,6 +184,8 @@
   }
   .f-num-gold { color: var(--f-gold-hi); text-shadow: 0 0 26px rgba(216, 180, 110, 0.4); }
   .f-num-alarm { color: #ff8478; text-shadow: 0 0 26px rgba(255, 107, 94, 0.38); }
+  .f-num-good { color: #7ee0a8; text-shadow: 0 0 26px rgba(126, 224, 168, 0.34); }
+  .f-num-fair { color: #f3c265; text-shadow: 0 0 26px rgba(243, 194, 101, 0.34); }
   .f-num-ice { color: var(--f-ice); text-shadow: 0 0 26px rgba(126, 207, 226, 0.34); }
 
   /* ── Fading hairline rule ───────────────────────────────────────────── */

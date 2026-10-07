@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, WifiClient } from '../api/client'
+import { SIGNAL_COLOR, SignalClass } from '../utils/rf'
 import Pagination from '../components/Pagination'
 import HelpButton from '../components/HelpButton'
 
 const PAGE_SIZE_DEFAULT = 25
 const PAGE_SIZE_OPTIONS = [25, 50, 75, 100]
+const SIGNAL_CLASSES: SignalClass[] = ['poor', 'fair', 'good']
 
 function fmtConnected(iso: string | null): string {
   if (!iso) return '—'
@@ -22,6 +24,8 @@ export default function Clients() {
   const [searchParams, setSearchParams] = useSearchParams()
   const apFilterId   = searchParams.get('access_point_id')
   const apFilterName = searchParams.get('access_point_name')
+  const sigParam     = searchParams.get('signal')
+  const signalFilter = SIGNAL_CLASSES.find(c => c === sigParam)
 
   const [clients, setClients]   = useState<WifiClient[]>([])
   const [total, setTotal]       = useState(0)
@@ -36,6 +40,7 @@ export default function Clients() {
     const filters = {
       access_point_id: apFilterId ? Number(apFilterId) : undefined,
       search: search || undefined,
+      signal: signalFilter,
     }
     Promise.all([
       api.getClients({ ...filters, limit: size, offset: (toPage - 1) * size }),
@@ -44,13 +49,19 @@ export default function Clients() {
       .then(([rows, countRes]) => { setClients(rows); setTotal(countRes.total) })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [apFilterId, search, pageSize])
+  }, [apFilterId, search, signalFilter, pageSize])
 
   useEffect(() => { load(1) }, [load])
 
   const changePageSize = (size: number) => {
     setPageSize(size)
     load(1, size)
+  }
+
+  const setSignalFilter = (c: SignalClass | null) => {
+    const next = new URLSearchParams(searchParams)
+    if (c) next.set('signal', c); else next.delete('signal')
+    setSearchParams(next)
   }
 
   const clearApFilter = () => {
@@ -90,6 +101,24 @@ export default function Clients() {
             <button onClick={clearApFilter} className="text-sky-500 hover:text-sky-200 ml-1" title="Clear AP filter">✕</button>
           </div>
         )}
+        <div className="flex items-center gap-2">
+          {SIGNAL_CLASSES.map(c => (
+            <button
+              key={c}
+              onClick={() => setSignalFilter(signalFilter === c ? null : c)}
+              aria-pressed={signalFilter === c}
+              className="flex items-center gap-1.5 text-xs text-white border px-2.5 py-1.5"
+              style={{
+                borderColor: signalFilter === c ? SIGNAL_COLOR[c] : 'rgba(255,255,255,.12)',
+                background: signalFilter === c ? `${SIGNAL_COLOR[c]}22` : undefined,
+              }}
+              title={`Show ${c} signal only`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: SIGNAL_COLOR[c] }} />
+              {c}
+            </button>
+          ))}
+        </div>
         {search && !apFilterId && (
           <button onClick={() => setSearch('')} className="text-xs text-white hover:text-white">Clear</button>
         )}
@@ -128,14 +157,18 @@ export default function Clients() {
           </thead>
           <tbody>
             {clients.map(c => (
-              <tr key={c.id} className="border-t border-gray-800">
+              <tr
+                key={c.id}
+                className="border-t border-gray-800"
+                style={c.signal_class ? { boxShadow: `inset 3px 0 0 ${SIGNAL_COLOR[c.signal_class]}` } : undefined}
+              >
                 <td className="px-4 py-2 text-white">{c.hostname || c.mac_address}</td>
                 <td className="px-4 py-2 text-gray-300">{c.ssid ?? '—'}</td>
                 <td className="px-4 py-2 text-gray-300">{c.band ?? '—'}</td>
                 <td className="px-4 py-2 text-gray-300">
                   {c.channel != null ? `ch ${c.channel}${c.channel_width_mhz ? ` @ ${c.channel_width_mhz}MHz` : ''}` : '—'}
                 </td>
-                <td className="px-4 py-2 text-gray-300">
+                <td className="px-4 py-2 text-gray-300" style={c.signal_class ? { color: SIGNAL_COLOR[c.signal_class] } : undefined}>
                   {c.rssi_dbm != null ? `${c.rssi_dbm} dBm` : '—'}{c.snr_db != null ? ` (${c.snr_db.toFixed(0)} dB SNR)` : ''}
                 </td>
                 <td className="px-4 py-2 text-gray-300">
@@ -147,7 +180,7 @@ export default function Clients() {
             ))}
             {clients.length === 0 && (
               <tr><td colSpan={8} className="px-4 py-8 text-center text-gray-500">
-                {search || apFilterId ? 'No clients match your filters.' : 'No clients seen yet.'}
+                {search || apFilterId || signalFilter ? 'No clients match your filters.' : 'No clients seen yet.'}
               </td></tr>
             )}
           </tbody>

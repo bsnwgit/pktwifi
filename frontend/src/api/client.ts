@@ -2,6 +2,7 @@
  * pktWiFi API client — typed fetch wrappers.
  * Access token is stored in memory (not localStorage).
  */
+import type { SignalClass } from '../utils/rf'
 
 // new URLSearchParams({foo: undefined}) serializes to the literal string
 // "foo=undefined" instead of omitting the key — confirmed the hard way in
@@ -176,9 +177,9 @@ export const api = {
   deleteAccessPoint: (id: number) => request(`/devices/${id}`, { method: 'DELETE' }),
 
   // -- Clients ---------------------------------------------------------------------
-  getClients: (params?: { access_point_id?: number; ssid?: string; search?: string; limit?: number; offset?: number }) =>
+  getClients: (params?: { access_point_id?: number; ssid?: string; search?: string; signal?: SignalClass; limit?: number; offset?: number }) =>
     request<WifiClient[]>(`/clients${toQueryString(params)}`),
-  countClients: (params?: { access_point_id?: number; ssid?: string; search?: string }) =>
+  countClients: (params?: { access_point_id?: number; ssid?: string; search?: string; signal?: SignalClass }) =>
     request<{ total: number }>(`/clients/count${toQueryString(params)}`),
   getClient: (mac: string) => request<WifiClient>(`/clients/${mac}`),
   getClientEvents: (mac: string) => request<ClientEvent[]>(`/clients/${mac}/events`),
@@ -600,6 +601,7 @@ export interface WifiClient {
   channel_width_mhz: number | null
   protocol: string | null
   rssi_dbm: number | null
+  signal_class: SignalClass | null
   snr_db: number | null
   tx_rate_mbps: number | null
   rx_rate_mbps: number | null
