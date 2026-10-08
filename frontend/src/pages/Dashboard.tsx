@@ -811,7 +811,7 @@ function Estate({ data }: { data: DashboardData }) {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] gap-4">
+      <div className="grid grid-cols-1 gap-4">
         <Card title="RF Spectrum" chip={<NowChip />}>
           <Spectrum bands={data.spectrum.bands} radios={data.spectrum.radios} hotPct={air.hot_pct}
                     onSelect={r => openMetrics(r.ap_id)} />
@@ -825,6 +825,9 @@ function Estate({ data }: { data: DashboardData }) {
             )}
           </div>
         </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card title="Signal Scope" chip={<NowChip />}>
           <div className="w-full max-h-[460px]" style={{ aspectRatio: '19 / 15' }}>
             <SignalScope
@@ -835,12 +838,12 @@ function Estate({ data }: { data: DashboardData }) {
             />
           </div>
         </Card>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card title="Client Flow" chip={<NowChip />}>
           <ClientFlow flows={data.ssid_band} />
         </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card title="Client Mix" chip={<NowChip />}>
           <ClientMix clients={data.clients} generations={data.generations} />
         </Card>

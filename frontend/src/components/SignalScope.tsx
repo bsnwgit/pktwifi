@@ -164,10 +164,18 @@ export default function SignalScope({
                 </g>
               ))}
 
+              {/* every other sector tinted, so each AP's wedge reads as a block */}
+              {n > 2 && sectors.map((_, i) => {
+                if (i % 2 === 0) return null
+                const [ax, ay] = polar(i * span, R_MAX), [bx, by] = polar((i + 1) * span, R_MAX)
+                return <path key={`t${i}`} fill={INSTRUMENT.gold} fillOpacity={0.05}
+                             d={`M${CX} ${CY} L${ax.toFixed(1)} ${ay.toFixed(1)} A${R_MAX} ${R_MAX} 0 ${span > 180 ? 1 : 0} 1 ${bx.toFixed(1)} ${by.toFixed(1)} Z`} />
+              })}
+
               {n > 1 && sectors.map((_, i) => {
                 const [x1, y1] = polar(i * span, R_CORE)
                 const [x2, y2] = polar(i * span, R_MAX)
-                return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={INSTRUMENT.gold} strokeOpacity={0.16} strokeWidth={px(1)} />
+                return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={INSTRUMENT.goldHi} strokeOpacity={0.7} strokeWidth={px(1.6)} />
               })}
 
               <g className="pw-scope-sweep" aria-hidden="true">
