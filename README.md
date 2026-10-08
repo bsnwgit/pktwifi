@@ -23,6 +23,26 @@ surfaces it through a React UI with alerting.
 
 **Default port:** `8769` (HTTP)
 
+## Why pktWiFi
+
+A self-hosted WiFi analyser for people who run real wireless estates and want one honest
+view of them — without a cloud account or a vendor lock-in.
+
+- **One picture across vendors.** Ubiquiti UniFi, Cisco Meraki and any SNMP-capable AP are
+  normalised into a single model, so an estate with mixed hardware reads the same way.
+- **RF you can see.** An RF spectrum places every radio on its channel and width; a signal
+  scope puts every client in its AP's sector, strongest at the centre.
+- **Service levels at a glance.** Clients, access points and alerts are colour-coded
+  green / amber / red, and clicking a Signal Quality bar opens exactly the clients behind it.
+- **Rogue AP detection and alerting** with Slack, email, webhook and SOAR delivery.
+- **Honest data.** A client that has left, or a band a controller stopped reporting, drops off
+  at once. Anything a controller does not report shows as *not reported*, never as zero.
+- **Part of a suite.** Pulls device, traffic, log and IP context from pktSNMP, pktFlow,
+  pktLog, pktPCAP and pktIPAM when they are present, and degrades cleanly when they are not.
+- **Self-hosted, source-available.** FastAPI + React, SQLite, an installer script, a systemd unit,
+  local and Okta SSO sign-in, role-based access. Free for noncommercial use under the
+  [PolyForm Noncommercial License](LICENSE).
+
 ---
 
 ## Table of Contents
@@ -220,9 +240,9 @@ Sidebar navigation (`frontend/src/components/Layout.tsx`):
 
 | Page | Access | What it does |
 |---|---|---|
-| **Dashboard** | all roles | One `/api/dashboard` read, refreshed every 30s: readouts (APs, availability, clients, airtime, median signal, alerts), client and per-band airtime trends over 1h/6h/24h/7d, an RF spectrum placing every radio's occupied channel block, a signal scope of clients by AP and RSSI, SSID→band flow, band and Wi-Fi generation mix, a signal histogram, busiest APs, collector health and active alerts. Radio and client figures count only rows written by each AP's latest poll. |
+| **Dashboard** | all roles | One `/api/dashboard` read, refreshed every 30s: readouts (APs, availability, clients, airtime, median signal, alerts), client and per-band airtime trends over 1h/6h/24h/7d, an RF spectrum placing every radio's occupied channel block, a signal scope of clients by AP and RSSI (sector dividers drawn bold so each AP reads as its own block), SSID→band flow, band and Wi-Fi generation mix, a signal histogram, busiest APs, collector health and active alerts. The top readouts are two rows of three — Access Points, Clients and Active Alerts above Availability, Airtime and Signal — and the Access Points, Clients and Alerts numbers are coloured green / amber / red (75% and 50% cut-offs for APs online and clients with good signal; alerts green at none, red when any are open). Clicking a Signal Quality bar or level opens Clients filtered to that level. Radio and client figures count only rows written by each AP's latest poll. |
 | **Access Points** | all roles | Searchable, server-side-paginated AP inventory across every controller — status, vendor, model, firmware. Click a row for a detail panel: per-radio channel/utilization/retry data where the controller supplies it, and connected clients grouped by the actual radio/channel they're attached to (see [Vendor Collectors](#vendor-collectors) for the UniFi API-key-mode caveat on that). A client row jumps to Clients pre-filtered to that AP; **View Metrics →** opens [Metrics](#metrics) pre-selected to that AP. |
-| **Clients** | all roles | Searchable, server-side-paginated client list — SSID, band, channel, RSSI/SNR, tx/rx rate, real connect time (**Connected** column — see the UniFi collector notes on what's actually reported per auth mode), which AP it's attached to. Supports an `?access_point_id=` filter (with a clearable chip) used by the Access Points detail panel's click-through. |
+| **Clients** | all roles | Searchable, server-side-paginated client list — SSID, band, channel, RSSI/SNR, tx/rx rate, real connect time (**Connected** column — see the UniFi collector notes on what's actually reported per auth mode), which AP it's attached to. Signal is colour-coded green good, amber fair, red poor (the server sends each client's `signal_class`, so the page never disagrees with the Dashboard), with good / fair / poor filter buttons that map to `?signal=good|fair|poor`; the Dashboard's Signal Quality links here. Supports an `?access_point_id=` filter (with a clearable chip) used by the Access Points detail panel's click-through. The list and `/api/clients/count` both accept `signal=good|fair|poor`. |
 | **Metrics** | all roles | Dedicated time-series view — pick an AP from the searchable left-hand list, see per-band channel-utilization/retry-rate/client-count charts for a 1h/6h/24h/7d window; see [Metrics](#metrics). |
 | **Alerts** | all roles (analyst+ can ack/resolve) | Alert rules + fired events; see [Alerting & Notifications](#alerting--notifications). |
 | **Logs** | all roles | AP/controller syslog and event context, including anything pulled in via the pktLog suite integration. |
