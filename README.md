@@ -1,6 +1,10 @@
 # pktWiFi
 
 <p align="center">
+  <img src="docs/screenshots/social-preview.png" alt="pktWiFi — See your whole wireless estate in one view" width="900">
+</p>
+
+<p align="center">
   <img src="lockup-256h.png" alt="pktWiFi" height="64">
 </p>
 
