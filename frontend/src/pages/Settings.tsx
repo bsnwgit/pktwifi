@@ -18,6 +18,7 @@ import { SslPanel } from './settings/SslPanel'
 import { UsersTab } from './settings/UsersTab'
 import { CertTextarea, LogForwardTester, MetadataPasteBox, PortField, ResonanceDiagnostics, ResonanceOriginField, RestartServiceRow, SendTestButton, SnapshotRestoreRow, SuiteTokenDisplay } from './settings/panels'
 import { Field, NumberInput, Section, SelectInput, SettingsMap, TextInput, Toggle, useSave } from './settings/shared'
+import UpdatePanel from '../components/UpdatePanel'
 
 // -- Main page ---------------------------------------------------------------------
 type TabId = 'general' | 'security' | 'data' | 'notifications' | 'resonance' | 'apikeys' | 'controllers' | 'credentials' | 'sites' | 'system'
@@ -1064,6 +1065,8 @@ export default function Settings() {
       {/* System — version/about info */}
       {tab === 'system' && (
         <div className="space-y-4">
+          <UpdatePanel isAdmin={isAdmin} />
+
           <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-800 grid grid-cols-3 gap-4 items-center">
               <h2 className="text-sm font-semibold text-white">System: {systemInfo?.app_name ?? 'pktWiFi'}</h2>
