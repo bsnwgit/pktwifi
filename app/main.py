@@ -117,10 +117,16 @@ async def lifespan(app: FastAPI):
     app.state.poll_engine = poll_engine
     log.info("WiFi collector poll engine started")
 
+    import asyncio
+    from app.self_update import run_forever as self_update_run_forever
+    self_update_task = asyncio.create_task(self_update_run_forever())
+    app.state.self_update_task = self_update_task
+
     yield
 
     # -- Shutdown ----------------------------------------------------------------
     log.info("pktWiFi shutting down")
+    self_update_task.cancel()
     await poll_engine.stop()
     await engine.stop()
     await cleanup.stop()
