@@ -67,8 +67,20 @@ class AccessPointReading:
 
 
 @dataclass
+class ClientObservation:
+    """A client heard by an AP it may not be joined to. Optional: a collector
+    reports these only when the controller really exposes them, and location
+    improves with each AP that hears a client. The AP a client is joined to is
+    recorded from its ClientReading and needs no observation."""
+    client_mac: str
+    ap_external_id: str
+    rssi_dbm: float
+
+
+@dataclass
 class PollResult:
     access_points: list[AccessPointReading] = field(default_factory=list)
+    observations: list[ClientObservation] = field(default_factory=list)
 
     @property
     def clients(self) -> list[ClientReading]:

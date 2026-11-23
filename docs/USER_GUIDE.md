@@ -37,6 +37,21 @@ A searchable, paginated list of connected wireless clients — SSID, band, chann
 
 Signal is colour-coded the same way as the Dashboard's Signal Quality — green good (≥ −65 dBm), amber fair (≥ −75 dBm), red poor — with a bar down the left of each row. The good / fair / poor buttons above the table filter to one level. Clicking a bar or a level in the Dashboard's **Signal Quality** opens this page already filtered to that level.
 
+## Map
+
+Where clients are, drawn on your floor plans. Pick a site, then a floor tab. Diamonds are access points; each dot is a client, coloured by its signal (good, fair or poor, the same cut-offs as Clients). The page refreshes every 15 seconds while it is open.
+
+**How to read a position.** Wi-Fi cannot say exactly where a device is, so the map says how it was placed:
+
+- **Heard by three or more access points** (an outlined dot): placed between them from how strongly each heard it. Expect it to be off by several metres or more.
+- **Joined to one access point** (a plain dot next to the AP): the signal only tells how far away the device probably is, not in which direction. Click it and a dashed ring shows that distance around the AP; the device could be anywhere on the ring. These dots are spread out around the AP so they don't pile up, so their exact spot on screen means nothing.
+
+Most controllers report only the access point a client is joined to, so most dots are the second kind.
+
+Click a client for its details and, as a dashed line, where it has roamed on this floor in the last 24 hours. The list beside the map is searchable by hostname, MAC, IP, SSID or access point.
+
+The page tells you when it cannot draw something: a floor with no plan, a floor with no scale (no rings or distances), no access points placed (nothing to anchor clients to), and how many clients are on access points that are not placed on any floor. An administrator sets all of that up under Settings → Floors.
+
 ## Metrics
 
 Pick an AP from the searchable list to see per-band channel-utilization, retry-rate, and client-count charts over a 1h/6h/24h/7d window.

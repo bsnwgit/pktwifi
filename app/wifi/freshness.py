@@ -32,6 +32,12 @@ def radio_is_current(radio: str = "r", ap: str = "ap") -> str:
     return f"{_alias(radio)}.updated_at >= datetime({_alias(ap)}.last_seen, '{_SLACK}')"
 
 
+def signal_is_current(signal: str = "s", ap: str = "ap") -> str:
+    """`signal` (a client_ap_signals row) was written by the latest poll of `ap`,
+    the access point that heard the client."""
+    return f"{_alias(signal)}.seen_at >= datetime({_alias(ap)}.last_seen, '{_SLACK}')"
+
+
 def client_is_current(client: str = "c", ap: str = "ap") -> str:
     """`client` was written by the latest poll of `ap`, the access point it is joined to."""
     return f"{_alias(client)}.last_seen >= datetime({_alias(ap)}.last_seen, '{_SLACK}')"

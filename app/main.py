@@ -36,6 +36,8 @@ from app.api import (
     ip_info as ip_info_router,
     mxtoolbox as mxtoolbox_router,
     sites as sites_router,
+    floors as floors_router,
+    locate as locate_router,
     widgets as widgets_router,
     nav as nav_router,
     docs as docs_router,
@@ -339,6 +341,8 @@ app.include_router(logs_router.router,      prefix="/api/logs",         tags=["l
 app.include_router(collectors_router.router, prefix="/api/collectors", tags=["collectors"])
 app.include_router(credentials_router.router, prefix="/api/credentials", tags=["credentials"])
 app.include_router(sites_router.router,      prefix="/api/sites",        tags=["sites"])
+app.include_router(floors_router.router,     prefix="/api/floors",       tags=["floors"])
+app.include_router(locate_router.router,     prefix="/api/locate",       tags=["locate"])
 app.include_router(integrations_router.router, prefix="/api/integrations", tags=["integrations"])
 app.include_router(settings_router.router,  prefix="/api/settings",     tags=["settings"])
 app.include_router(system_router.router,    prefix="/api/system",       tags=["system"])

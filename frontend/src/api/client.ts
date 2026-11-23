@@ -74,6 +74,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json()
 }
 
+/** A fetch that carries the token and retries once after a refresh, for the
+ *  calls that are not JSON in and out (a plan image up or down). */
+async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const withAuth = (): RequestInit => ({
+    ...init,
+    headers: { ...(init.headers as Record<string, string>), ...(_accessToken ? { Authorization: `Bearer ${_accessToken}` } : {}) },
+  })
+  let res = await fetch(url, withAuth())
+  if (res.status === 401 && (await tryRefresh())) res = await fetch(url, withAuth())
+  return res
+}
+
 async function tryRefresh(): Promise<boolean> {
   try {
     const res = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' })
@@ -243,6 +255,42 @@ export const api = {
   createSite: (body: { name: string; description?: string | null }) => request<Site>('/sites', { method: 'POST', body: JSON.stringify(body) }),
   updateSite: (id: number, body: { name: string; description?: string | null }) => request<Site>(`/sites/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteSite: (id: number) => request(`/sites/${id}`, { method: 'DELETE' }),
+
+  // -- Floors and client location --------------------------------------------
+  getFloors: (siteId?: number) => request<Floor[]>(`/floors${toQueryString({ site_id: siteId })}`),
+  createFloor: (body: { site_id: number; name: string; level: number }) =>
+    request<Floor>('/floors', { method: 'POST', body: JSON.stringify(body) }),
+  updateFloor: (id: number, body: { name?: string; level?: number }) =>
+    request<Floor>(`/floors/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteFloor: (id: number) => request(`/floors/${id}`, { method: 'DELETE' }),
+  setFloorScale: (id: number, body: { x1: number; y1: number; x2: number; y2: number; distance_m: number }) =>
+    request<Floor>(`/floors/${id}/scale`, { method: 'PUT', body: JSON.stringify(body) }),
+  placeAccessPoint: (apId: number, body: { floor_id: number | null; x_px?: number; y_px?: number }) =>
+    request<AccessPoint>(`/devices/${apId}/placement`, { method: 'PATCH', body: JSON.stringify(body) }),
+  locateFloor: (floorId: number) => request<FloorLocation>(`/locate/floors/${floorId}`),
+  clientTrail: (mac: string, hours = 24) =>
+    request<{ mac_address: string; hours: number; points: TrailPoint[] }>(
+      `/locate/clients/${encodeURIComponent(mac)}/trail${toQueryString({ hours })}`),
+  /** The plan image is behind sign-in, so an <img src> cannot fetch it: it is
+   *  fetched with the token and handed to the page as an object URL. The caller
+   *  revokes it. */
+  floorPlanUrl: async (floorId: number): Promise<string> => {
+    const res = await authedFetch(`/api/floors/${floorId}/plan`)
+    if (!res.ok) throw new Error(res.status === 404 ? 'This floor has no plan image' : `${res.status} ${res.statusText}`)
+    return URL.createObjectURL(await res.blob())
+  },
+  uploadFloorPlan: async (floorId: number, file: File): Promise<Floor> => {
+    const res = await authedFetch(`/api/floors/${floorId}/plan`, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(err.detail || res.statusText)
+    }
+    return res.json()
+  },
 
   // -- Integrations (suite-token client of sibling pkt apps) -----------------------
   getIntegrations: () => request<Integration[]>('/integrations'),
@@ -581,6 +629,9 @@ export interface AccessPoint {
   firmware_version: string | null
   site: string | null
   floor: string | null
+  floor_id: number | null
+  x_px: number | null
+  y_px: number | null
   status: string
   is_rogue: boolean
   uptime_seconds: number | null
@@ -777,6 +828,58 @@ export interface Site {
   name: string
   description: string | null
   created_at: string
+}
+
+export interface Floor {
+  id: number
+  site_id: number
+  site_name: string
+  name: string
+  level: number
+  has_plan: boolean
+  image_w: number | null
+  image_h: number | null
+  scale_px_per_m: number | null
+  placed_aps: number
+  created_at: string
+  scale_reset?: boolean
+}
+
+export interface LocatedClient {
+  mac_address: string
+  hostname: string | null
+  ip_address: string | null
+  ssid: string | null
+  band: string | null
+  rssi_dbm: number | null
+  signal_class: SignalClass | null
+  access_point_id: number
+  access_point_name: string
+  x_px: number
+  y_px: number
+  accuracy_m: number | null
+  accuracy_px: number | null
+  method: 'trilateration' | 'associated'
+  anchors: number
+  last_seen: string
+}
+
+export interface FloorLocation {
+  floor: { id: number; name: string; site_id: number; image_w: number | null; image_h: number | null; scale_px_per_m: number | null; has_plan: boolean }
+  access_points: Array<{ id: number; name: string; status: string; x_px: number; y_px: number }>
+  clients: LocatedClient[]
+  unplaced_clients: number
+}
+
+export interface TrailPoint {
+  ts: string
+  event_type: string
+  access_point_id: number
+  access_point_name: string
+  floor_id: number | null
+  floor_name: string | null
+  x_px: number | null
+  y_px: number | null
 }
 
 export interface CollectorType {

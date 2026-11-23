@@ -77,6 +77,7 @@ const NAV = [
   { to: '/',               label: 'Dashboard',     icon: '◑', adminOnly: false },
   { to: '/access-points',  label: 'Access Points', icon: '⬡', adminOnly: false },
   { to: '/clients',        label: 'Clients',       icon: '▤', adminOnly: false },
+  { to: '/map',            label: 'Map',           icon: '◎', adminOnly: false },
   { to: '/metrics',        label: 'Metrics',       icon: '∿', adminOnly: false },
   { to: '/alerts',         label: 'Alerts',        icon: '△', adminOnly: false, dividerBefore: true },
   { to: '/logs',           label: 'Logs',          icon: '≡', adminOnly: false },

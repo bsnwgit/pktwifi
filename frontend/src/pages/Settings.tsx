@@ -14,6 +14,7 @@ import { ControllersTab } from './settings/ControllersTab'
 import { CredentialsTab } from './settings/CredentialsTab'
 import { SiblingIntegrations } from './settings/Integrations'
 import { SitesTab } from './settings/SitesTab'
+import { FloorsTab } from './settings/FloorsTab'
 import { SslPanel } from './settings/SslPanel'
 import { UsersTab } from './settings/UsersTab'
 import { CertTextarea, LogForwardTester, MetadataPasteBox, PortField, ResonanceDiagnostics, ResonanceOriginField, RestartServiceRow, SendTestButton, SnapshotRestoreRow, SuiteTokenDisplay } from './settings/panels'
@@ -21,7 +22,7 @@ import { Field, NumberInput, Section, SelectInput, SettingsMap, TextInput, Toggl
 import UpdatePanel from '../components/UpdatePanel'
 
 // -- Main page ---------------------------------------------------------------------
-type TabId = 'general' | 'security' | 'data' | 'notifications' | 'resonance' | 'apikeys' | 'controllers' | 'credentials' | 'sites' | 'system'
+type TabId = 'general' | 'security' | 'data' | 'notifications' | 'resonance' | 'apikeys' | 'controllers' | 'credentials' | 'sites' | 'floors' | 'system'
 
 // Tabs before gapBefore are the suite-common set every pkt app shares and make
 // up the "Common" section; gapBefore and everything after it are
@@ -39,6 +40,7 @@ const TABS: Array<{ id: TabId; label: string; adminOnly?: boolean; gapBefore?: b
   { id: 'controllers',   label: 'Controllers', adminOnly: true, gapBefore: true },
   { id: 'credentials',   label: 'Credentials', adminOnly: true },
   { id: 'sites',         label: 'Sites', adminOnly: true },
+  { id: 'floors',        label: 'Floors', adminOnly: true },
 ]
 
 // ── Top-level sections — Common holds the tabs that used to sit left of the
@@ -109,6 +111,29 @@ const DATA_TABS: Array<{ id: DataTabId; label: string }> = [
   { id: 'logforward', label: 'Log Forwarding' },
 ]
 
+// /settings?tab=<id>[&sub=<id>] — the place the page is showing, kept in the URL
+// so a reload, the back button or a bookmark returns to it instead of to
+// General. Legacy pre-reorg ids (collectors/integrations/auth/users/backup) are
+// still understood so older links keep working.
+function parseSettingsLink(params: URLSearchParams): { tab: TabId; security?: SecurityTabId; data?: DataTabId } {
+  const tab = params.get('tab')
+  const sub = params.get('sub')
+  switch (tab) {
+    case 'collectors':   return { tab: 'controllers' }
+    case 'integrations': return { tab: 'security', security: 'suite' }
+    case 'auth':         return { tab: 'security', security: 'auth' }
+    case 'users':        return { tab: 'security', security: 'users' }
+    case 'backup':       return { tab: 'data', data: 'backups' }
+  }
+  const found = TABS.find(t => t.id === tab)
+  if (!found) return { tab: 'general' }
+  return {
+    tab: found.id,
+    security: found.id === 'security' ? SECURITY_TABS.find(s => s.id === sub)?.id : undefined,
+    data: found.id === 'data' ? DATA_TABS.find(d => d.id === sub)?.id : undefined,
+  }
+}
+
 export default function Settings() {
   // Settings is a desk surface — dense configuration grids and the widest
   // tables in the app. Below md it says so rather than collapsing badly,
@@ -120,20 +145,13 @@ export default function Settings() {
   // ids plus legacy pre-reorg ids (integrations/auth/users/ai/backup) so older
   // links keep working — IpLink still navigates to ?tab=integrations for the
   // Suite Integration pane, which now lives under Security.
-  const [searchParams] = useSearchParams()
-  const deepLink = ((): { tab: TabId; security?: SecurityTabId; data?: DataTabId } => {
-    switch (searchParams.get('tab')) {
-      case 'security': case 'data': case 'notifications': case 'apikeys':
-      case 'controllers': case 'credentials': case 'sites': case 'system':
-        return { tab: searchParams.get('tab') as TabId }
-      case 'collectors':   return { tab: 'controllers' }
-      case 'integrations': return { tab: 'security', security: 'suite' }
-      case 'auth':         return { tab: 'security', security: 'auth' }
-      case 'users':        return { tab: 'security', security: 'users' }
-      case 'backup':       return { tab: 'data', data: 'backups' }
-      default:             return { tab: 'general' }
-    }
-  })()
+  const [searchParams, setSearchParams] = useSearchParams()
+  // No ?tab= in the address (a bare /settings, e.g. an embed that reloads its
+  // fixed address): fall back to where this browser session last was.
+  const deepLink = parseSettingsLink(((): URLSearchParams => {
+    if (searchParams.get('tab')) return searchParams
+    try { return new URLSearchParams(sessionStorage.getItem('pktwifi.settings.tab') ?? '') } catch { return searchParams }
+  })())
   const [tab, setTab] = useState<TabId>(deepLink.tab)
   const [section, setSection] = useState<SectionId>(sectionOfTab(deepLink.tab))
   const selectSection = (s: SectionId) => {
@@ -143,6 +161,31 @@ export default function Settings() {
   }
   const [securityTab, setSecurityTab] = useState<SecurityTabId>(deepLink.security ?? (isAdmin ? 'users' : 'auth'))
   const [dataTab, setDataTab] = useState<DataTabId>(deepLink.data ?? 'storage')
+
+  // State -> URL: what is open is written to the address as it changes
+  // (replacing the entry, so Back leaves Settings rather than stepping through tabs).
+  useEffect(() => {
+    // Start from the current params so ones like chromeless=1 (pktHub embed) survive.
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', tab)
+    next.delete('sub')
+    if (tab === 'security') next.set('sub', securityTab)
+    else if (tab === 'data') next.set('sub', dataTab)
+    try { sessionStorage.setItem('pktwifi.settings.tab', next.toString()) } catch { /* storage may be blocked */ }
+    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, securityTab, dataTab])
+
+  // URL -> state: a link followed while Settings is already open (such as the
+  // Suite Integration link in an IP lookup) moves the page, not just the address.
+  useEffect(() => {
+    if (!searchParams.get('tab')) return
+    const d = parseSettingsLink(searchParams)
+    setTab(d.tab)
+    setSection(sectionOfTab(d.tab))
+    if (d.security) setSecurityTab(d.security)
+    if (d.data) setDataTab(d.data)
+  }, [searchParams])
   const [settings, setSettings] = useState<SettingsMap>({})
   const [loading, setLoading] = useState(true)
   const dirtyRef = useRef(false)
@@ -1061,6 +1104,7 @@ export default function Settings() {
 
       {/* Sites — pktWiFi-specific, right of the tab divider */}
       {tab === 'sites' && isAdmin && <SitesTab />}
+      {tab === 'floors' && isAdmin && <FloorsTab />}
 
       {/* System — version/about info */}
       {tab === 'system' && (
