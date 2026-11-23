@@ -97,6 +97,11 @@ async def run_cleanup_now(db_path: str) -> dict:
         )
         client_events_deleted = result.rowcount
 
+        # Location only ever reads the signal rows the latest poll wrote, so
+        # anything a day old is a client that has gone. Not a setting: nothing
+        # of value is lost, and the table is bounded by clients x APs anyway.
+        await db.execute("DELETE FROM client_ap_signals WHERE seen_at < datetime('now', '-1 day')")
+
         # A poll rewrites updated_at on every radio a controller still reports, so
         # one that has gone this long unreported is gone (an access point that now
         # reports other bands, or no longer reports at all). Its metrics rows go

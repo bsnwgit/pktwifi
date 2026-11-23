@@ -130,7 +130,21 @@ async def _merge_stray_ap(db: aiosqlite.Connection, stray_id: int, canonical_id:
     await db.execute("DELETE FROM access_points WHERE id = ?", (stray_id,))
 
 
+async def _save_signal(db: aiosqlite.Connection, mac: str, ap_id: int, rssi_dbm: float) -> None:
+    """The signal `mac` was last heard at by AP `ap_id`: the one row per pair
+    that client location reads. seen_at is what freshness.signal_is_current
+    compares against the AP's own last poll."""
+    await db.execute(
+        """INSERT INTO client_ap_signals (client_mac, access_point_id, rssi_dbm, seen_at)
+           VALUES (?, ?, ?, datetime('now'))
+           ON CONFLICT(client_mac, access_point_id) DO UPDATE SET
+             rssi_dbm=excluded.rssi_dbm, seen_at=datetime('now')""",
+        (mac, ap_id, rssi_dbm),
+    )
+
+
 async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResult) -> None:
+    ap_ids: dict[str, int] = {}
     for ap in result.access_points:
         # external_id is only stable within one collector's own ID scheme —
         # UniFi's api_key mode reports Integration-API UUIDs while userpass
@@ -200,6 +214,8 @@ async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResu
             )
             ap_row = await cur.fetchone()
             ap_id = ap_row[0]
+
+        ap_ids[ap.external_id] = ap_id
 
         for radio in ap.radios:
             cur = await db.execute(
@@ -273,6 +289,15 @@ async def _persist(db: aiosqlite.Connection, collector_id: int, result: PollResu
                         "INSERT INTO client_events (mac_address, event_type, from_ap_id, to_ap_id) VALUES (?, ?, ?, ?)",
                         (client.mac_address, event_type, prev_ap_id, ap_id),
                     )
+
+                if client.rssi_dbm is not None:
+                    await _save_signal(db, client.mac_address, ap_id, client.rssi_dbm)
+
+    # Signals from APs a client is not joined to, where a collector reports them.
+    for obs in result.observations:
+        obs_ap_id = ap_ids.get(obs.ap_external_id)
+        if obs_ap_id is not None:
+            await _save_signal(db, obs.client_mac, obs_ap_id, obs.rssi_dbm)
 
     # Full-replace semantics per poll: an AP this collector stored before but
     # didn't report this time no longer exists on the controller (renamed,

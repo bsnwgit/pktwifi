@@ -7,6 +7,7 @@ import { lazy, Suspense } from 'react'
 const Dashboard     = lazy(() => import('./pages/Dashboard'))
 const AccessPoints  = lazy(() => import('./pages/AccessPoints'))
 const Clients       = lazy(() => import('./pages/Clients'))
+const MapPage       = lazy(() => import('./pages/Map'))
 const Metrics       = lazy(() => import('./pages/Metrics'))
 const Alerts        = lazy(() => import('./pages/Alerts'))
 const Logs          = lazy(() => import('./pages/Logs'))
@@ -61,6 +62,11 @@ export default function App() {
           <Route path="/clients" element={
             <ProtectedRoute>
               <Suspense fallback={<PageFallback />}><Clients /></Suspense>
+            </ProtectedRoute>
+          } />
+          <Route path="/map" element={
+            <ProtectedRoute>
+              <Suspense fallback={<PageFallback />}><MapPage /></Suspense>
             </ProtectedRoute>
           } />
           <Route path="/metrics" element={

@@ -98,9 +98,22 @@ pktWiFi is SQLite-only — there's no analytical-backend picker like pktsnmp/pkt
 
 If RF metric volume ever grows large enough to need it, a ClickHouse/DuckDB backend abstraction would need to be built following the pattern already established in pktsnmp — not present in this app today.
 
+## Floors & the Map
+
+The Map page shows where clients are on floor plans. It is only as good as the setup under Settings → Floors (admin; analysts can use the same API):
+
+1. **Add a floor.** A floor belongs to a site (add the site first under Sites). The *level* only orders the floor tabs, lowest first. A site can have as many floors as it needs.
+2. **Upload its plan.** PNG or JPEG, up to 8 MB and 8000 pixels on a side. SVG and anything else is refused. The type is decided from the file's own bytes. Plans are stored under `<install dir>/floorplans/`, named by floor id. Replacing a plan with one of a different size clears the floor's scale (it described the old image); placements are kept but will be in the wrong place until you move them.
+3. **Set the scale.** Choose *Set scale*, click the two ends of a distance you know (a wall, a corridor), enter its real length in metres and save. The scale is what turns signal strength into metres. Without it clients are still drawn at their access points, but there are no distances or rings.
+4. **Place the access points.** Choose *Place access points*, pick one on the right and click the plan where it hangs; drag a diamond to move it. Placements are not touched by polls, and an access point that reappears under another controller entry keeps its placement. The `floor` text a controller reports is unrelated and is left alone.
+
+**What the map can and cannot do.** A client's position comes from the signal each placed access point heard it at. Today every collector reports only the access point a client is *joined to* (and Meraki and UniFi API-key mode report no per-client signal at all), so most clients are drawn at their access point with a ring for the estimated distance. A UniFi controller was checked directly: its client list and its newer clients list carry one signal per client (to the access point it is joined to), its neighbouring-AP list describes other access points rather than clients, and none of them carries a direction. Its map and heat-map endpoints returned nothing, so there are no floor plans or positions to import. Position from three or more access points is built and tested, and starts working for any collector that reports signal from more than one access point (the `client_ap_signals` table); none does yet. Distance uses a typical indoor path-loss model, not a measurement of your building, so treat every figure as an estimate.
+
+Deleting a floor removes its image and clears its placements; the access points themselves stay. Located clients are the ones the latest poll of each access point reported. Signal rows older than a day are removed by the daily cleanup.
+
 ## Backup & Restore
 
-Configure schedule, rotation, and path at Data → Backups. Each snapshot is a timestamped directory containing `pktwifi.db` and `config.yaml`.
+Configure schedule, rotation, and path at Data → Backups. Each snapshot is a timestamped directory containing `pktwifi.db`, `config.yaml` and, once any floor plan exists, a copy of the `floorplans/` directory (the plan images live beside the database, not in it).
 
 **Restoring:**
 - Every listed snapshot has a **Restore…** link — restores directly from that on-server snapshot, no download/upload needed. Expanding it shows a checkbox per file present, so you can restore just the DB or just the config instead of both together.

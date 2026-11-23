@@ -120,6 +120,17 @@ def run_backup_sync(db_path: str) -> dict:
             result["files"].append("config.yaml")
             break
 
+    # Floor plan images live beside the database, not in it, so a snapshot of the
+    # database alone would restore floors that point at files no longer there.
+    plans = Path(_cfg.install_dir) / "floorplans"
+    if plans.is_dir():
+        try:
+            shutil.copytree(str(plans), str(snap_dir / "floorplans"), dirs_exist_ok=True)
+            result["files"].append("floorplans/")
+        except OSError as e:
+            log.warning(f"Backup {snap_dir.name}: floor plans could not be copied: {e}")
+            result["status"] = "floorplans_not_copied"
+
     keep = int(s["backup_rotation_count"])
     snapshots = sorted(
         [d for d in backup_root.iterdir() if d.is_dir() and d.name.startswith("backup_")],

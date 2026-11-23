@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 
+import math
+
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -31,6 +33,14 @@ class UpdateApRequest(BaseModel):
     is_rogue: bool | None = None
 
 
+class PlacementRequest(BaseModel):
+    """Where an AP sits on a floor plan, in image pixels. A null floor_id clears
+    the placement."""
+    floor_id: int | None = None
+    x_px: float | None = None
+    y_px: float | None = None
+
+
 def _ap_out(row) -> dict:
     return {
         "id": row["id"],
@@ -44,6 +54,9 @@ def _ap_out(row) -> dict:
         "firmware_version": row["firmware_version"],
         "site": row["site"],
         "floor": row["floor"],
+        "floor_id": row["floor_id"],
+        "x_px": row["x_px"],
+        "y_px": row["y_px"],
         "status": row["status"],
         "is_rogue": bool(row["is_rogue"]),
         "uptime_seconds": row["uptime_seconds"],
@@ -188,6 +201,38 @@ async def update_access_point(ap_id: int, body: UpdateApRequest, user: AnalystUs
     await db.execute(
         "UPDATE access_points SET name = ?, site = ?, floor = ?, is_rogue = ? WHERE id = ?",
         (name, site, floor, is_rogue, ap_id),
+    )
+    await db.commit()
+    async with db.execute("SELECT * FROM access_points WHERE id = ?", (ap_id,)) as cur:
+        row = await cur.fetchone()
+    return _ap_out(row)
+
+
+@router.patch("/{ap_id}/placement")
+async def place_access_point(ap_id: int, body: PlacementRequest, user: AnalystUser, db: aiosqlite.Connection = Depends(get_db)):
+    async with db.execute("SELECT id FROM access_points WHERE id = ?", (ap_id,)) as cur:
+        if not await cur.fetchone():
+            raise HTTPException(status_code=404, detail="Access point not found")
+
+    if body.floor_id is None:
+        floor_id, x, y = None, None, None
+    else:
+        async with db.execute("SELECT * FROM floors WHERE id = ?", (body.floor_id,)) as cur:
+            floor = await cur.fetchone()
+        if not floor:
+            raise HTTPException(status_code=404, detail="Floor not found")
+        if not floor["image_path"]:
+            raise HTTPException(status_code=409, detail="Upload a plan for this floor before placing access points on it")
+        x, y = body.x_px, body.y_px
+        if x is None or y is None or not (math.isfinite(x) and math.isfinite(y)):
+            raise HTTPException(status_code=422, detail="x_px and y_px are required")
+        if not (0 <= x <= floor["image_w"]) or not (0 <= y <= floor["image_h"]):
+            raise HTTPException(status_code=422, detail="The position is outside the plan")
+        floor_id = body.floor_id
+
+    await db.execute(
+        "UPDATE access_points SET floor_id = ?, x_px = ?, y_px = ? WHERE id = ?",
+        (floor_id, x, y, ap_id),
     )
     await db.commit()
     async with db.execute("SELECT * FROM access_points WHERE id = ?", (ap_id,)) as cur:
